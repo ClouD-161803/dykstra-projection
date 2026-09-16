@@ -145,6 +145,8 @@ class LTIVer2Solver(LTIVer1Solver):
         # Track error and activity at the initial point
         self._track_error(0)
         self._track_activity(0)
+        if self.max_iter == 0:
+            return self._format_output()
 
         # One exact cycle sets x, e, y and the first active set
         active = self._dykstra_cycle(1)

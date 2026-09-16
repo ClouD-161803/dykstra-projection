@@ -16,14 +16,10 @@ class LTIVer1Solver(ConvexProjectionSolver):
 
     def _prepare(self) -> None:
         """Normalise the half-spaces."""
-        self.unit_A = np.array([
-            self._normalise(row, offset)[0]
-            for row, offset in zip(self.A, self.b)
-        ])
-        self.unit_b = np.array([
-            self._normalise(row, offset)[1]
-            for row, offset in zip(self.A, self.b)
-        ])
+        self.unit_A = np.empty_like(self.A)
+        self.unit_b = np.empty_like(self.b)
+        for index, (row, offset) in enumerate(zip(self.A, self.b)):
+            self.unit_A[index], self.unit_b[index] = self._normalise(row, offset)
         self.y = np.zeros(self.n)
 
     def _sync_y_from_e(self) -> None:
@@ -111,6 +107,8 @@ class LTIVer1Solver(ConvexProjectionSolver):
         # Track error and activity at the initial point
         self._track_error(0)
         self._track_activity(0)
+        if self.max_iter == 0:
+            return self._format_output()
 
         # One exact cycle sets x, e, y and the first active set
         active = self._dykstra_cycle(1)
