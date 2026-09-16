@@ -13,8 +13,18 @@ class LTIVer5Solver(LTIVer4Solver):
 
     def __init__(self, *args, eig_cond_cap: float = 1e8, block_size: int = 4096, **kwargs) -> None:
         """Solver options."""
+        try:
+            eig_cond_cap = float(eig_cond_cap)
+        except (TypeError, ValueError) as error:
+            raise ValueError("eig_cond_cap must be a finite value greater than one.") from error
+        if not np.isfinite(eig_cond_cap) or eig_cond_cap <= 1.0:
+            raise ValueError("eig_cond_cap must be a finite value greater than one.")
+        if (isinstance(block_size, (bool, np.bool_)) or
+                not isinstance(block_size, (int, np.integer)) or block_size < 1):
+            raise ValueError("block_size must be a positive integer.")
+
         super().__init__(*args, **kwargs)
-        self.eig_cond_cap = float(eig_cond_cap)
+        self.eig_cond_cap = eig_cond_cap
         self.block_size = int(block_size)
 
         # True once the result is proven to be the projection
