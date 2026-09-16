@@ -1,25 +1,15 @@
 """Records one Dykstra run's active-set schedule and replays it with the oracle."""
 
 import time
-import numpy as np
-from oracle import record_schedule, oracle_lti_projection
 from lti_ver5 import LTIVer5Solver
+from lti_examples import box_line_problem
+from oracle import oracle_lti_projection, record_schedule
 
 
 def run() -> None:
     """Box-and-line example."""
-    # Box: -1 <= x <= 1, -1 <= y <= 1
-    A_box = np.array([[1., 0.], [-1., 0.], [0., 1.], [0., -1.]])
-    b_box = np.array([1., 1., 1., 1.])
-    # Line x/2 + y = 1 as two opposite half-spaces
-    A_line = np.array([[0.5, 1.], [-0.5, -1.]])
-    b_line = np.array([1., -1.])
-
-    z = np.array([-2., 1.4])
+    z, A, b, _ = box_line_problem()
     max_iter: int = 200
-
-    A: np.ndarray = np.vstack([A_box, A_line])
-    b: np.ndarray = np.hstack([b_box, b_line])
 
     schedule, dykstra_result = record_schedule(z, A, b, max_iter)
     start = time.perf_counter()
