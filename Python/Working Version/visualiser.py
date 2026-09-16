@@ -550,11 +550,19 @@ class Visualiser:
             plot_original_point: Original point z (optional).
             plot_optimal_point: Optimal solution (optional).
         """
-        # Create infrastructure for plots
-        self.fig = plt.figure(figsize=(16, 10))
-        gs = gridspec.GridSpec(3, 2)
-        self.ax_main = self.fig.add_subplot(gs[:2, 0])
-        self.ax_error = self.fig.add_subplot(gs[2, 0])
+        # Give each activity trace its own row. The previous fixed three-row
+        # grid failed whenever a problem contained more than three constraints.
+        num_halfspaces = (
+            self.result.active_half_spaces.shape[0]
+            if self.result.active_half_spaces is not None else 0
+        )
+        total_rows = max(3, num_halfspaces)
+        self.fig = plt.figure(
+            figsize=(16, max(10, 2 * total_rows)), layout="constrained"
+        )
+        gs = gridspec.GridSpec(total_rows, 2, figure=self.fig, wspace=0.35)
+        self.ax_main = self.fig.add_subplot(gs[0:total_rows - 1, 0])
+        self.ax_error = self.fig.add_subplot(gs[total_rows - 1, 0])
 
         if self.ax_main is None or self.ax_error is None:
             print("Failed to create axes.")
@@ -583,8 +591,6 @@ class Visualiser:
         if self.result.active_half_spaces is not None:
             self.plot_active_halfspaces(self.fig, gs)
 
-        plt.subplots_adjust(hspace=0.3)
-        plt.tight_layout()
         plt.show()
 
 
