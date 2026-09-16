@@ -9,7 +9,6 @@ import matplotlib.gridspec as gridspec
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle
-from matplotlib import cm
 from projection_result import ProjectionResult
 
 
@@ -341,7 +340,7 @@ class Visualiser:
             dot_product = np.dot(np.vstack([X.ravel(), Y.ravel()]).T, N[i])
             Z = np.where(dot_product.reshape(X.shape) > c[i], 0, Z)
 
-        colourmap = cm.get_cmap(cmap)
+        colourmap = plt.get_cmap(cmap)
         colour = colourmap(0.69)
 
         ax.contourf(X, Y, Z, levels=[0.5, 1.5], colors=[colour], alpha=0.5)
@@ -359,7 +358,7 @@ class Visualiser:
             cmap: Colourmap name.
             ax: Axes handle for plotting.
         """
-        colourmap = cm.get_cmap(cmap)
+        colourmap = plt.get_cmap(cmap)
         colour = colourmap(0.69)
 
         if N[0, 1] == 0:
@@ -711,7 +710,7 @@ class ComparisonVisualiser:
             dot_product = np.dot(np.vstack([X.ravel(), Y.ravel()]).T, N[i])
             Z = np.where(dot_product.reshape(X.shape) > c[i], 0, Z)
 
-        colourmap = cm.get_cmap(cmap)
+        colourmap = plt.get_cmap(cmap)
         colour = colourmap(0.69)
         ax.contourf(X, Y, Z, levels=[0.5, 1.5], colors=[colour], alpha=0.5)
         ax.plot([], [], color=colour, alpha=0.5, label=label)
@@ -719,7 +718,7 @@ class ComparisonVisualiser:
     def plot_1d_space(self, N: np.ndarray, c: np.ndarray, label: str, 
                       cmap: str, ax: Axes) -> None:
         
-        colourmap = cm.get_cmap(cmap)
+        colourmap = plt.get_cmap(cmap)
         colour = colourmap(0.69)
         if N[0, 1] == 0:
             ax.axvline(x=c[0] / N[0, 0], linestyle='-', linewidth=2,

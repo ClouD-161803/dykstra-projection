@@ -28,7 +28,6 @@ Additional Features:
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib import cm
 
 
 def plot_2d_space(N: np.ndarray, c: np.ndarray, X: np.ndarray, Y: np.ndarray,
@@ -66,7 +65,7 @@ def plot_2d_space(N: np.ndarray, c: np.ndarray, X: np.ndarray, Y: np.ndarray,
         Z = np.where(dot_product.reshape(X.shape) > c[i], 0, Z)  # Reshape before comparison
 
     # Colours
-    colourmap = cm.get_cmap(cmap)
+    colourmap = plt.get_cmap(cmap)
     # Map colourmap to a single colour for boundaries
     colour = colourmap(0.69) # some arbitrary constant (totally random)
 
@@ -94,7 +93,7 @@ def plot_1d_space(N: np.ndarray, c: np.ndarray, label: str, cmap: str, ax,
     """
 
     # Colours
-    colourmap = cm.get_cmap(cmap)
+    colourmap = plt.get_cmap(cmap)
     colour = colourmap(0.69) # again, a total coincidence
 
     # Check for division by 0
