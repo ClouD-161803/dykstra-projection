@@ -20,6 +20,7 @@ Additional Features:
 - Active and inactive half-space plotting.
 """
 
+from __future__ import annotations
 
 import numpy as np
 from abc import ABC, abstractmethod

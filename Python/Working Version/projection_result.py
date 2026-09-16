@@ -2,6 +2,8 @@
 This module defines the ProjectionResult dataclass for storing solver outputs.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 import numpy as np
 
