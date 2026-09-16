@@ -1,3 +1,4 @@
-﻿numpy==2.1.1
+# Requires Python >= 3.10, < 3.14
+numpy==2.1.1
 matplotlib==3.9.2
 quadprog==0.1.12
