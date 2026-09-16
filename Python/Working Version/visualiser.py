@@ -85,7 +85,11 @@ class ResultExporter:
                 writer.writerow(['STALLED_ERRORS'])
                 writer.writerow(['iteration', 'stalled_error'])
                 for i, error in enumerate(result.stalled_errors):
-                    error_val = error if error is not None else ''
+                    error_val = (
+                        '' if error is None or
+                        (isinstance(error, (float, np.floating)) and np.isnan(error))
+                        else error
+                    )
                     writer.writerow([i, error_val])
                 writer.writerow([])
             
@@ -93,7 +97,11 @@ class ResultExporter:
                 writer.writerow(['CONVERGED_ERRORS'])
                 writer.writerow(['iteration', 'converged_error'])
                 for i, error in enumerate(result.converged_errors):
-                    error_val = error if error is not None else ''
+                    error_val = (
+                        '' if error is None or
+                        (isinstance(error, (float, np.floating)) and np.isnan(error))
+                        else error
+                    )
                     writer.writerow([i, error_val])
                 writer.writerow([])
             
@@ -109,10 +117,13 @@ class ResultExporter:
                 writer.writerow([])
             
             if result.active_half_spaces is not None:
-                writer.writerow(['ACTIVE_HALFSPACES'])
-                writer.writerow(['constraint'] + [f'iteration_{i}' for i in range(max_iter)])
-                
                 active = result.active_half_spaces
+                writer.writerow(['ACTIVE_HALFSPACES'])
+                writer.writerow(
+                    ['constraint'] +
+                    [f'iteration_{i}' for i in range(active.shape[1])]
+                )
+
                 for m in range(active.shape[0]):
                     writer.writerow([m] + active[m].tolist())
                 writer.writerow([])
@@ -194,7 +205,12 @@ class ResultExporter:
                         break
                     i += 1
                 if path_data:
-                    data['path'] = np.array(path_data)
+                    path = np.array(path_data)
+                    num_constraints = data.get('metadata', {}).get('num_constraints')
+                    if (isinstance(num_constraints, int) and num_constraints > 0 and
+                            path.shape[0] % num_constraints == 0):
+                        path = path.reshape(-1, num_constraints, path.shape[-1])
+                    data['path'] = path
             
             elif section_name == 'SQUARED_ERRORS':
                 i += 1
@@ -257,7 +273,12 @@ class ResultExporter:
                         break
                     i += 1
                 if errors_data:
-                    data['errors_for_plotting'] = np.array(errors_data)
+                    errors = np.array(errors_data)
+                    num_constraints = data.get('metadata', {}).get('num_constraints')
+                    if (isinstance(num_constraints, int) and num_constraints > 0 and
+                            errors.shape[0] % num_constraints == 0):
+                        errors = errors.reshape(-1, num_constraints, errors.shape[-1])
+                    data['errors_for_plotting'] = errors
             
             elif section_name == 'ACTIVE_HALFSPACES':
                 i += 1
