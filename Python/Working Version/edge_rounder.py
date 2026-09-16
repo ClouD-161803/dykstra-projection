@@ -4,7 +4,7 @@ Explanation:
     1. Straight Sides:
        * Defines constraints for the four straight sides of the box using
         outward-facing normal vectors.
-       * Calculates the constant offsets `c_straight` based on the position of
+       * Calculates the constant offsets `b_straight` based on the position of
         the center and dimensions of the box.
 
     2. Rounded Corners:
@@ -20,15 +20,15 @@ Explanation:
        * Calculates the offset `offset` for the segment based on the position
         of the center, normal vector, and radius.
        * Appends the `normal` and `offset` to lists
-        `N_rounded` and `c_rounded`, respectively.
+        `A_rounded` and `b_rounded`, respectively.
 
     3. Combination:
-       * Converts the lists `N_rounded` and `c_rounded` to NumPy arrays.
+       * Converts the lists `A_rounded` and `b_rounded` to NumPy arrays.
        * Vertically stacks the straight side constraints
-        (`N_straight`, `c_straight`) and the rounded corner constraints
-        (`N_rounded`, `c_rounded`) to form the final `N` and `c`.
+        (`A_straight`, `b_straight`) and the rounded corner constraints
+        (`A_rounded`, `b_rounded`) to form the final `A` and `b`.
 
-    The resulting `N` and `c` can be used in optimization or projection algorithms
+    The resulting `A` and `b` can be used in optimization or projection algorithms
     that require half-space constraints to represent the rounded box.
 """
 
@@ -38,7 +38,7 @@ import numpy as np
 
 def rounded_box_constraints(center, width, height, corner_segments=5):
     """
-    Generates half-space constraints (N, c) that define a box with rounded corners.
+    Generates half-space constraints (A, b) that define a box with rounded corners.
 
     This function approximates the rounded corners of a box using multiple
     linear segments (half-spaces).
@@ -52,11 +52,11 @@ def rounded_box_constraints(center, width, height, corner_segments=5):
         each rounded corner (default is 5).
 
     Returns:
-        A tuple (N, c) where:
+        A tuple (A, b) where:
 
-        * N: A NumPy array where each row represents the outward-facing normal
+        * A: A NumPy array where each row represents the outward-facing normal
             vector of a half-space constraint.
-        * c: A NumPy array where each element represents the constant offset
+        * b: A NumPy array where each element represents the constant offset
             of a corresponding half-space constraint.
     """
 
@@ -64,13 +64,13 @@ def rounded_box_constraints(center, width, height, corner_segments=5):
     half_height = height / 2
 
     # Constraints for the straight sides (outward-facing normals)
-    N_straight = np.array([
+    A_straight = np.array([
         [-1, 0],  # Left side
         [1, 0],   # Right side
         [0, -1],  # Bottom side
         [0, 1]    # Top side
     ])
-    c_straight = np.array([
+    b_straight = np.array([
         -center[0] + half_width,
         center[0] + half_width,
         -center[1] + half_height,
@@ -78,8 +78,8 @@ def rounded_box_constraints(center, width, height, corner_segments=5):
     ])
 
     # Constraints for the rounded corners
-    N_rounded = []
-    c_rounded = []
+    A_rounded = []
+    b_rounded = []
     for corner in [(1, 1), (-1, 1), (-1, -1), (1, -1)]:  # Four corners
         for i in range(corner_segments):
             angle = i / corner_segments * np.pi / 2  # Adjusted angle calculation
@@ -87,15 +87,15 @@ def rounded_box_constraints(center, width, height, corner_segments=5):
             # Radius of the rounded corner is the minimum of half_width and half_height
             radius = min(half_width, half_height)
             offset = np.dot(normal, center) + radius
-            N_rounded.append(normal)
-            c_rounded.append(offset)
+            A_rounded.append(normal)
+            b_rounded.append(offset)
     # This inevitably generates an extra copy of the original box constraints
 
-    N_rounded = np.array(N_rounded)
-    c_rounded = np.array(c_rounded)
+    A_rounded = np.array(A_rounded)
+    b_rounded = np.array(b_rounded)
 
     # Combine all constraints
-    N = np.vstack([N_straight, N_rounded])
-    c = np.hstack([c_straight, c_rounded])
+    A = np.vstack([A_straight, A_rounded])
+    b = np.hstack([b_straight, b_rounded])
 
-    return N, c
+    return A, b
