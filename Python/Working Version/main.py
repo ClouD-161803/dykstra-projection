@@ -16,7 +16,7 @@ def run() -> None:
 
     # # * Without rounding
     # Define the box constraints (half-spaces) (make sure these are floats)
-    N_box = np.array([
+    A_box = np.array([
         [1., 0.],  # Right side of the box: x <= 1
         [-1., 0.], # Left side of the box: x >= -1
         [0., 1.],  # Top side of the box: y <= 1
@@ -30,16 +30,16 @@ def run() -> None:
     # width = 2
     # height = 2
     # corner_count = 3
-    # N_box, c_box = rounded_box_constraints(center, width, height, corner_count)
+    # A_box, b_box = rounded_box_constraints(center, width, height, corner_count)
 
     corner_count = 1
 
     # Define the line constraints
     # The line equation is y = 1 - x/2
-    # Rearranging to get it in the form N*x <= b:
+    # Rearranging to get it in the form A*x <= b:
     # x/2 + y <= 1 & x/2 + y >= 1
-    N_line = np.array([[1/2, 1], [-1/2, -1]])
-    b_line = np.array([1, -1])
+    A_line = np.array([[0.5, 1.], [-0.5, -1.]])
+    b_line = np.array([1., -1.])
 
     # Point to project and x-y range (uncomment wanted example)
 
@@ -80,17 +80,17 @@ def run() -> None:
 
     # --- Configuration ---
     
-    max_iter: int = 10
+    max_iter: int = 30
     plot_activity: bool = True
     plot_quivers: bool = True
     
     # Combine constraints
     # Project onto box, then line
-    A: np.ndarray = np.vstack([N_box, N_line])
+    A: np.ndarray = np.vstack([A_box, A_line])
     b: np.ndarray = np.hstack([b_box, b_line])
 
     # # Project onto line, then box
-    # A: np.ndarray = np.vstack([N_line, N_box])
+    # A: np.ndarray = np.vstack([A_line, A_box])
     # b: np.ndarray = np.hstack([b_line, b_box])
 
     # --- Solver Selection ---
@@ -134,16 +134,16 @@ def run() -> None:
     print(f"The distance to the optimal solution is: {distance}")
     print(f"The squared-error is {np.dot(distance, distance)}\n")
 
-    Nc_pairs = [
+    ab_pairs = [
         (f"'Box'\n(rounded by {corner_count} corner(s))" if corner_count > 1 else "Box", 
-         "Greys", N_box, b_box),
-        ("Line", "Greys", N_line, b_line)
+         "Greys", A_box, b_box),
+        ("Line", "Greys", A_line, b_line)
     ]
 
     # # * Vertical Layout
-    visualiser = VerticalVisualiser(result, Nc_pairs, max_iter, x_range, y_range, solver_name)
+    visualiser = VerticalVisualiser(result, ab_pairs, max_iter, x_range, y_range, solver_name)
     # # * Horizontal Layout
-    # visualiser = Visualiser(result, Nc_pairs, max_iter, x_range, y_range, solver_name)
+    # visualiser = Visualiser(result, ab_pairs, max_iter, x_range, y_range, solver_name)
 
     visualiser.visualise(plot_original_point=z, plot_optimal_point=actual_projection)
 
