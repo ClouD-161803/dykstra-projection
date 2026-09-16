@@ -47,43 +47,36 @@ def run() -> None:
     z = np.array([-2., 1.4])
     x_range = [-2.05, 0.5]
     y_range = [0.8, 1.5]
-    delete_half_spaces = True
 
     # # * Simple top left - no stalling - y y y
     # z = np.array([-0.75, 1.2])
     # x_range = [-1.5, 0.75]
     # y_range = [0.7, 1.4]
-    # delete_half_spaces = True
 
     # # * Intersection - no stalling - y y n
     # z = np.array([0.5, 1.75])
     # x_range = [-2., 2.]
     # y_range = [0., 2.]
-    # delete_half_spaces = True
 
     # # * Very far to the top left - y n y
     # z = np.array([-10, 5.])
     # x_range = [-10, 0.5]
     # y_range = [0.5, 6]
-    # delete_half_spaces = True
 
     # # * Very far to bottom left - n y y
     # z = np.array([-5, -5])
     # x_range = [-6, 0.5]
     # y_range = [-6, 4.]
-    # delete_half_spaces = True
 
     # # * Very far to the top right y y n
     # z = np.array([3.5, 3.5])
     # x_range = [-1, 4.]
     # y_range = [-1., 4.]
-    # delete_half_spaces = True
 
     # # * Very far to the bottom right - y n y
     # z = np.array([10, -5])
     # x_range = [0, 11.]
     # y_range = [-6, 1.]
-    # delete_half_spaces = True
 
     # --- Configuration ---
     
@@ -107,8 +100,7 @@ def run() -> None:
         z, A, b, max_iter,
         track_error=True,
         plot_errors=plot_quivers,
-        plot_active_halfspaces=plot_activity,
-        delete_spaces=delete_half_spaces
+        plot_active_halfspaces=plot_activity
     )
     
     # # * Hybrid MAP-Dykstra Algorithm
@@ -116,8 +108,7 @@ def run() -> None:
     #     z, A, b, max_iter,
     #     track_error=True,
     #     plot_errors=plot_quivers,
-    #     plot_active_halfspaces=plot_activity,
-    #     delete_spaces=delete_half_spaces
+    #     plot_active_halfspaces=plot_activity
     # )
 
     # # * Dykstra with Stalling Detection
@@ -125,8 +116,7 @@ def run() -> None:
     #     z, A, b, max_iter,
     #     track_error=True,
     #     plot_errors=plot_quivers,
-    #     plot_active_halfspaces=plot_activity,
-    #     delete_spaces=delete_half_spaces
+    #     plot_active_halfspaces=plot_activity
     # )
     
 

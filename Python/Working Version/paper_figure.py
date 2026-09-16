@@ -21,7 +21,6 @@ def run() -> None:
     z = np.array([-2., 1.4])
     x_range = [-2.05, 0.5]
     y_range = [0.8, 1.5]
-    delete_half_spaces = True
     
     max_iter: int = 30
     plot_activity: bool = True
@@ -34,16 +33,14 @@ def run() -> None:
         z, A, b, max_iter,
         track_error=True,
         plot_errors=plot_quivers,
-        plot_active_halfspaces=plot_activity,
-        delete_spaces=delete_half_spaces
+        plot_active_halfspaces=plot_activity
     )
     
     solver2 = FastForward(
         z, A, b, max_iter,
         track_error=True,
         plot_errors=plot_quivers,
-        plot_active_halfspaces=plot_activity,
-        delete_spaces=delete_half_spaces
+        plot_active_halfspaces=plot_activity
     )
     
     result1 = solver1.solve()
