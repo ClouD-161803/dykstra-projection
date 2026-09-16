@@ -1,12 +1,17 @@
-.idea
-__pycache__
-/Latex/Initial Version/
-/Python/Previous Version/
-# Default ignored files
+# Python bytecode and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+
+# IDE files
+.idea/
 /shelf/
 /workspace.xml
-# Editor-based HTTP Client requests
 /httpRequests/
-# Datasource local storage ignored files
 /dataSources/
 /dataSources.local.xml
+
+# Operating-system files
+.DS_Store
