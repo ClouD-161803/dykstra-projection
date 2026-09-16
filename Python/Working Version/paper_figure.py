@@ -5,7 +5,7 @@ from visualiser import ResultExporter, ComparisonVisualiser
 
 
 def run() -> None:
-    N_box = np.array([
+    A_box = np.array([
         [1., 0.],
         [-1., 0.],
         [0., 1.],
@@ -15,8 +15,8 @@ def run() -> None:
     
     corner_count = 1
     
-    N_line = np.array([[1/2, 1], [-1/2, -1]])
-    b_line = np.array([1, -1])
+    A_line = np.array([[0.5, 1.], [-0.5, -1.]])
+    b_line = np.array([1., -1.])
     
     z = np.array([-2., 1.4])
     x_range = [-2.05, 0.5]
@@ -26,7 +26,7 @@ def run() -> None:
     plot_activity: bool = True
     plot_quivers: bool = False
     
-    A: np.ndarray = np.vstack([N_box, N_line])
+    A: np.ndarray = np.vstack([A_box, A_line])
     b: np.ndarray = np.hstack([b_box, b_line])
     
     solver1 = Dykstra(
@@ -56,8 +56,8 @@ def run() -> None:
         output_path=output_dir,
         solver_name=solver1_name,
         initial_point=z,
-        N=A,
-        c=b,
+        A=A,
+        b=b,
         max_iter=max_iter,
         track_error=True,
         plot_errors=plot_quivers,
@@ -69,8 +69,8 @@ def run() -> None:
         output_path=output_dir,
         solver_name=solver2_name,
         initial_point=z,
-        N=A,
-        c=b,
+        A=A,
+        b=b,
         max_iter=max_iter,
         track_error=True,
         plot_errors=plot_quivers,
@@ -80,17 +80,17 @@ def run() -> None:
     print(f"\nSolver 1 ({solver1_name}) projection: {result1.projection}")
     print(f"Solver 2 ({solver2_name}) projection: {result2.projection}")
     
-    nc_pairs1 = [
-        ("Box", "Greys", N_box, b_box),
-        ("Line", "Greys", N_line, b_line)
+    ab_pairs1 = [
+        ("Box", "Greys", A_box, b_box),
+        ("Line", "Greys", A_line, b_line)
     ]
-    nc_pairs2 = [
-        ("Box", "Greys", N_box, b_box),
-        ("Line", "Greys", N_line, b_line)
+    ab_pairs2 = [
+        ("Box", "Greys", A_box, b_box),
+        ("Line", "Greys", A_line, b_line)
     ]
     
     visualiser = ComparisonVisualiser(
-        result1, result2, nc_pairs1, nc_pairs2,
+        result1, result2, ab_pairs1, ab_pairs2,
         max_iter, x_range, y_range,
         solver1_name, solver2_name,
         z,
@@ -102,4 +102,3 @@ def run() -> None:
 
 if __name__ == "__main__":
     run()
-

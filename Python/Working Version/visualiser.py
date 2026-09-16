@@ -12,11 +12,17 @@ from matplotlib.patches import Rectangle
 from projection_result import ProjectionResult
 
 
+# New files are written with the A @ x <= b convention.  The legacy markers
+# remain accepted so existing recorded experiments can still be loaded.
+_CONSTRAINT_MATRIX_SECTIONS = ("CONSTRAINTS_A", "CONSTRAINTS_N")
+_CONSTRAINT_VECTOR_SECTIONS = ("CONSTRAINTS_B", "CONSTRAINTS_C")
+
+
 class ResultExporter:
     
     @staticmethod
     def export(result: ProjectionResult, output_path: str, solver_name: str,
-               initial_point: np.ndarray, N: np.ndarray, c: np.ndarray,
+               initial_point: np.ndarray, A: np.ndarray, b: np.ndarray,
                max_iter: int, **kwargs) -> None:
         
         if os.path.isdir(output_path) or not output_path.endswith('.csv'):
@@ -36,7 +42,7 @@ class ResultExporter:
             writer.writerow(['solver_name', solver_name])
             writer.writerow(['max_iterations', max_iter])
             writer.writerow(['dimensions', len(initial_point)])
-            writer.writerow(['num_constraints', N.shape[0]])
+            writer.writerow(['num_constraints', A.shape[0]])
             
             for key, value in kwargs.items():
                 writer.writerow([key, value])
@@ -53,14 +59,14 @@ class ResultExporter:
             writer.writerow(result.projection)
             writer.writerow([])
             
-            writer.writerow(['CONSTRAINTS_N'])
-            for i, normal in enumerate(N):
+            writer.writerow(['CONSTRAINTS_A'])
+            for i, normal in enumerate(A):
                 writer.writerow([f'normal_{i}'] + normal.tolist())
             writer.writerow([])
             
-            writer.writerow(['CONSTRAINTS_C'])
-            writer.writerow(['c_' + str(i) for i in range(len(c))])
-            writer.writerow(c)
+            writer.writerow(['CONSTRAINTS_B'])
+            writer.writerow(['b_' + str(i) for i in range(len(b))])
+            writer.writerow(b)
             writer.writerow([])
             
             if result.path is not None:
@@ -150,8 +156,10 @@ class ResultExporter:
             if section_name == 'METADATA':
                 data['metadata'] = {}
                 while i < len(lines) and lines[i] and lines[i][0]:
-                    if lines[i][0] in ['INITIAL_POINT', 'FINAL_PROJECTION', 'CONSTRAINTS_N',
-                                       'CONSTRAINTS_C', 'PATH_HISTORY', 'SQUARED_ERRORS',
+                    if lines[i][0] in ['INITIAL_POINT', 'FINAL_PROJECTION',
+                                       *_CONSTRAINT_MATRIX_SECTIONS,
+                                       *_CONSTRAINT_VECTOR_SECTIONS,
+                                       'PATH_HISTORY', 'SQUARED_ERRORS',
                                        'STALLED_ERRORS', 'CONVERGED_ERRORS', 
                                        'ERRORS_FOR_PLOTTING', 'ACTIVE_HALFSPACES']:
                         break
@@ -175,20 +183,21 @@ class ResultExporter:
                 data['final_projection'] = np.array([float(x) for x in lines[i]])
                 i += 1
             
-            elif section_name == 'CONSTRAINTS_N':
+            elif section_name in _CONSTRAINT_MATRIX_SECTIONS:
                 normals = []
                 while i < len(lines) and lines[i] and lines[i][0]:
-                    if lines[i][0] in ['CONSTRAINTS_C', 'PATH_HISTORY', 'SQUARED_ERRORS',
+                    if lines[i][0] in [*_CONSTRAINT_VECTOR_SECTIONS,
+                                      'PATH_HISTORY', 'SQUARED_ERRORS',
                                       'STALLED_ERRORS', 'CONVERGED_ERRORS',
                                       'ERRORS_FOR_PLOTTING', 'ACTIVE_HALFSPACES']:
                         break
                     normals.append(np.array([float(x) for x in lines[i][1:]]))
                     i += 1
-                data['constraints_N'] = np.array(normals)
+                data['constraints_A'] = np.array(normals)
             
-            elif section_name == 'CONSTRAINTS_C':
+            elif section_name in _CONSTRAINT_VECTOR_SECTIONS:
                 i += 1
-                data['constraints_c'] = np.array([float(x) for x in lines[i]])
+                data['constraints_b'] = np.array([float(x) for x in lines[i]])
                 i += 1
             
             elif section_name == 'PATH_HISTORY':
@@ -307,13 +316,13 @@ class Visualiser:
     
     Attributes:
         result: ProjectionResult object containing solver outputs.
-        nc_pairs: List of tuples (label, cmap, N, c) defining half-spaces.
+        ab_pairs: List of tuples (label, cmap, A, b) defining half-spaces.
         max_iter: Number of iterations performed.
         x_range: X-axis range for plotting.
         y_range: Y-axis range for plotting.
     """
     
-    def __init__(self, result: ProjectionResult, nc_pairs: list, 
+    def __init__(self, result: ProjectionResult, ab_pairs: list,
                  max_iter: int, x_range: list[float], y_range: list[float],
                  solver_name: str = "Dykstra's Algorithm") -> None:
         """
@@ -321,14 +330,14 @@ class Visualiser:
         
         Args:
             result: ProjectionResult object from solver.
-            nc_pairs: List of (label, cmap, N, c) tuples for half-spaces.
+            ab_pairs: List of (label, cmap, A, b) tuples for half-spaces.
             max_iter: Number of iterations.
             x_range: [min_x, max_x] for plotting domain.
             y_range: [min_y, max_y] for plotting domain.
             solver_name: Name of the solver used.
         """
         self.result = result
-        self.nc_pairs = nc_pairs
+        self.ab_pairs = ab_pairs
         self.max_iter = max_iter
         self.x_range = x_range
         self.y_range = y_range
@@ -341,14 +350,14 @@ class Visualiser:
         self.fontsize_tick = 15
         self.fontsize_legend = 17
 
-    def plot_2d_space(self, N: np.ndarray, c: np.ndarray, X: np.ndarray, Y: np.ndarray,
+    def plot_2d_space(self, A: np.ndarray, b: np.ndarray, X: np.ndarray, Y: np.ndarray,
                       label: str, cmap: str, ax: Axes) -> None:
         """
         Plot a 2D region defined by the intersection of half-spaces.
 
         Args:
-            N: Matrix of normal vectors.
-            c: Vector of constant offsets.
+            A: Matrix of normal vectors.
+            b: Vector of constant offsets.
             X: 2D array of x coordinates.
             Y: 2D array of y coordinates.
             label: Label for the plot.
@@ -357,9 +366,9 @@ class Visualiser:
         """
         Z = np.ones_like(X)
 
-        for i in range(N.shape[0]):
-            dot_product = np.dot(np.vstack([X.ravel(), Y.ravel()]).T, N[i])
-            Z = np.where(dot_product.reshape(X.shape) > c[i], 0, Z)
+        for i in range(A.shape[0]):
+            dot_product = np.dot(np.vstack([X.ravel(), Y.ravel()]).T, A[i])
+            Z = np.where(dot_product.reshape(X.shape) > b[i], 0, Z)
 
         colourmap = plt.get_cmap(cmap)
         colour = colourmap(0.69)
@@ -367,14 +376,14 @@ class Visualiser:
         ax.contourf(X, Y, Z, levels=[0.5, 1.5], colors=[colour], alpha=0.5)
         ax.plot([], [], color=colour, alpha=0.5, label=label)
 
-    def plot_1d_space(self, N: np.ndarray, c: np.ndarray, label: str, 
+    def plot_1d_space(self, A: np.ndarray, b: np.ndarray, label: str,
                       cmap: str, ax: Axes) -> None:
         """
         Plot a 1D region (line) defined by the intersection of half-spaces.
 
         Args:
-            N: Matrix of normal vectors.
-            c: Vector of constant offsets.
+            A: Matrix of normal vectors.
+            b: Vector of constant offsets.
             label: Label for the plot.
             cmap: Colourmap name.
             ax: Axes handle for plotting.
@@ -382,15 +391,15 @@ class Visualiser:
         colourmap = plt.get_cmap(cmap)
         colour = colourmap(0.69)
 
-        if N[0, 1] == 0:
-            ax.axvline(x=c[0] / N[0, 0], linestyle='-', linewidth=2,
+        if A[0, 1] == 0:
+            ax.axvline(x=b[0] / A[0, 0], linestyle='-', linewidth=2,
                         label='Vertical line', color=colour)
-        elif N[0, 0] == 0:
-            ax.axhline(y=c[0] / N[0, 1], linestyle='-', linewidth=2,
+        elif A[0, 0] == 0:
+            ax.axhline(y=b[0] / A[0, 1], linestyle='-', linewidth=2,
                         label='Horizontal line', color=colour)
         else:
             x_line = np.linspace(self.x_range[0], self.x_range[1], 100)
-            y_line = (c[0] - N[0, 0] * x_line) / N[0, 1]
+            y_line = (b[0] - A[0, 0] * x_line) / A[0, 1]
             ax.plot(x_line, y_line, linewidth=2, label=label, color=colour)
 
     def plot_half_spaces(self, ax: Axes) -> None:
@@ -405,15 +414,15 @@ class Visualiser:
             y = np.linspace(self.y_range[0], self.y_range[1], 500)
             X, Y = np.meshgrid(x, y)
 
-            for label, cmap, N, c in self.nc_pairs:
-                rank = np.linalg.matrix_rank(N)
+            for label, cmap, A, b in self.ab_pairs:
+                rank = np.linalg.matrix_rank(A)
                 if rank == 1:
-                    self.plot_1d_space(N, c, label, cmap, ax)
+                    self.plot_1d_space(A, b, label, cmap, ax)
                 elif rank == 2:
-                    self.plot_2d_space(N, c, X, Y, label, cmap, ax)
+                    self.plot_2d_space(A, b, X, Y, label, cmap, ax)
                 else:
                     raise ValueError("Dimension not supported. "
-                                   "Please provide N and c for 1D or 2D cases.")
+                                   "Please provide A and b for 1D or 2D cases.")
 
             ax.set_aspect('equal')
             ax.set_xlabel('X coordinate', fontsize=self.fontsize_label)
@@ -427,10 +436,10 @@ class Visualiser:
 
         except TypeError as e:
             print(f"TypeError occurred: {e}. "
-                  f"Please ensure nc_pairs is a list of tuples.")
+                  f"Please ensure ab_pairs is a list of tuples.")
         except ValueError as e:
             print(f"ValueError occurred: {e}. "
-                  f"Check the format of nc_pairs or the dimensions of N.")
+                  f"Check the format of ab_pairs or the dimensions of A.")
 
     def plot_path(self, ax: Axes) -> None:
         """
@@ -517,7 +526,6 @@ class Visualiser:
     def plot_active_halfspaces(self, fig: Figure, gs: gridspec.GridSpec) -> None:
         """
         Plot the activity of half-spaces over iterations.
-        Colors match the error tracking per iteration: green for converged, yellow for stalling, red for errors.
 
         Args:
             fig: Figure handle.
@@ -704,7 +712,7 @@ class VerticalVisualiser(Visualiser):
 class ComparisonVisualiser:
     
     def __init__(self, result1: ProjectionResult, result2: ProjectionResult,
-                 nc_pairs1: list, nc_pairs2: list,
+                 ab_pairs1: list, ab_pairs2: list,
                  max_iter: int, x_range: list[float], y_range: list[float],
                  solver_name1: str, solver_name2: str,
                  initial_point: np.ndarray,
@@ -713,8 +721,8 @@ class ComparisonVisualiser:
         
         self.result1 = result1
         self.result2 = result2
-        self.nc_pairs1 = nc_pairs1
-        self.nc_pairs2 = nc_pairs2
+        self.ab_pairs1 = ab_pairs1
+        self.ab_pairs2 = ab_pairs2
         self.max_iter = max_iter
         self.x_range = x_range
         self.y_range = y_range
@@ -729,39 +737,39 @@ class ComparisonVisualiser:
         self.fontsize_tick = 12
         self.fontsize_legend = 12
     
-    def plot_2d_space(self, N: np.ndarray, c: np.ndarray, X: np.ndarray, Y: np.ndarray,
+    def plot_2d_space(self, A: np.ndarray, b: np.ndarray, X: np.ndarray, Y: np.ndarray,
                       label: str, cmap: str, ax: Axes) -> None:
         
         Z = np.ones_like(X)
-        for i in range(N.shape[0]):
-            dot_product = np.dot(np.vstack([X.ravel(), Y.ravel()]).T, N[i])
-            Z = np.where(dot_product.reshape(X.shape) > c[i], 0, Z)
+        for i in range(A.shape[0]):
+            dot_product = np.dot(np.vstack([X.ravel(), Y.ravel()]).T, A[i])
+            Z = np.where(dot_product.reshape(X.shape) > b[i], 0, Z)
 
         colourmap = plt.get_cmap(cmap)
         colour = colourmap(0.69)
         ax.contourf(X, Y, Z, levels=[0.5, 1.5], colors=[colour], alpha=0.5)
         ax.plot([], [], color=colour, alpha=0.5, label=label)
 
-    def plot_1d_space(self, N: np.ndarray, c: np.ndarray, label: str, 
+    def plot_1d_space(self, A: np.ndarray, b: np.ndarray, label: str,
                       cmap: str, ax: Axes) -> None:
         
         colourmap = plt.get_cmap(cmap)
         colour = colourmap(0.69)
-        if N[0, 1] == 0:
-            ax.axvline(x=c[0] / N[0, 0], linestyle='-', linewidth=2,
+        if A[0, 1] == 0:
+            ax.axvline(x=b[0] / A[0, 0], linestyle='-', linewidth=2,
                         label='Vertical line', color=colour)
-        elif N[0, 0] == 0:
-            ax.axhline(y=c[0] / N[0, 1], linestyle='-', linewidth=2,
+        elif A[0, 0] == 0:
+            ax.axhline(y=b[0] / A[0, 1], linestyle='-', linewidth=2,
                         label='Horizontal line', color=colour)
         else:
             x_line = np.linspace(self.x_range[0], self.x_range[1], 100)
-            y_line = (c[0] - N[0, 0] * x_line) / N[0, 1]
+            y_line = (b[0] - A[0, 0] * x_line) / A[0, 1]
             ax.plot(x_line, y_line, linewidth=2, label=label, color=colour)
 
     def plot_top_projection(self, ax: Axes) -> None:
         
         result = self.result1 if self.display_result_index == 0 else self.result2
-        nc_pairs = self.nc_pairs1 if self.display_result_index == 0 else self.nc_pairs2
+        ab_pairs = self.ab_pairs1 if self.display_result_index == 0 else self.ab_pairs2
         solver_name = self.solver_name1 if self.display_result_index == 0 else self.solver_name2
         
         try:
@@ -769,12 +777,12 @@ class ComparisonVisualiser:
             y = np.linspace(self.y_range[0], self.y_range[1], 500)
             X, Y = np.meshgrid(x, y)
 
-            for label, cmap, N, c in nc_pairs:
-                rank = np.linalg.matrix_rank(N)
+            for label, cmap, A, b in ab_pairs:
+                rank = np.linalg.matrix_rank(A)
                 if rank == 1:
-                    self.plot_1d_space(N, c, label, cmap, ax)
+                    self.plot_1d_space(A, b, label, cmap, ax)
                 elif rank == 2:
-                    self.plot_2d_space(N, c, X, Y, label, cmap, ax)
+                    self.plot_2d_space(A, b, X, Y, label, cmap, ax)
 
             ax.set_aspect('equal')
             ax.set_xlabel(r'$x$ coordinate', fontsize=self.fontsize_label)
