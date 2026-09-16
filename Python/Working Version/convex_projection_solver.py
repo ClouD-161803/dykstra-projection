@@ -16,12 +16,14 @@ Additional Features:
 - Error tracking: Option to track and plot errors at each iteration.
 - Convergence and stalling detection.
 - Generalised for any number of dimensions.
-- Inactive half-space removal.
+- Input validation and dimension inference.
 - Active and inactive half-space plotting.
 """
 
 from __future__ import annotations
 
+
+import warnings
 import numpy as np
 from abc import ABC, abstractmethod
 from projection_result import ProjectionResult
@@ -98,32 +100,65 @@ class ConvexProjectionSolver(ABC):
             return boundary_projection
 
     @staticmethod
-    def _delete_inactive_half_spaces(z: np.ndarray, N: np.ndarray, c: np.ndarray) -> tuple:
+    def _delete_inactive_half_spaces(z: np.ndarray, N: np.ndarray,
+                                     c: np.ndarray) -> tuple:
+        """Deprecated compatibility helper that preserves every constraint.
+
+        A half-space containing ``z`` cannot be removed safely: it may still
+        bound the feasible intersection and determine the final projection.
         """
-        Deletes inactive half spaces.
+        del z
+        warnings.warn(
+            "_delete_inactive_half_spaces is deprecated and no longer removes "
+            "constraints.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return N.copy(), c.copy()
 
-        Args:
-            z: Point used to check for inactive half spaces.
-            N: Matrix of normal vectors.
-            c: Vector of constant offsets.
+    @staticmethod
+    def _validate_problem(z: np.ndarray, N: np.ndarray, c: np.ndarray,
+                          max_iter: int, dimensions: int | None) -> tuple:
+        """Validate and copy a half-space projection problem."""
+        z_array = np.asarray(z, dtype=float)
+        N_array = np.asarray(N, dtype=float)
+        c_array = np.asarray(c, dtype=float)
 
-        Returns:
-            tuple: Updated matrix of normal vectors and vector of constant offsets.
-        """
-        indices_to_remove = np.zeros_like(c, dtype=bool)
+        if z_array.ndim != 1 or z_array.size == 0:
+            raise ValueError("z must be a non-empty one-dimensional point.")
+        if N_array.ndim != 2:
+            raise ValueError("N must be a two-dimensional constraint matrix.")
+        if c_array.ndim != 1:
+            raise ValueError("c must be a one-dimensional vector of offsets.")
+        if N_array.shape[0] != c_array.shape[0]:
+            raise ValueError("N and c must contain the same number of constraints.")
+        if N_array.shape[1] != z_array.size:
+            raise ValueError(
+                "Each normal in N must have the same dimension as z "
+                f"({z_array.size})."
+            )
+        if not (np.isfinite(z_array).all() and np.isfinite(N_array).all()
+                and np.isfinite(c_array).all()):
+            raise ValueError("z, N, and c must contain only finite values.")
+        if N_array.shape[0] and np.any(np.linalg.norm(N_array, axis=1) == 0):
+            raise ValueError("N must not contain zero-norm constraint normals.")
+        if (dimensions is not None and
+                (isinstance(dimensions, (bool, np.bool_)) or
+                 not isinstance(dimensions, (int, np.integer)) or
+                 dimensions != z_array.size)):
+            raise ValueError(
+                "dimensions must match the dimension of z "
+                f"({z_array.size}), or be omitted."
+            )
+        if (isinstance(max_iter, (bool, np.bool_)) or
+                not isinstance(max_iter, (int, np.integer)) or max_iter < 0):
+            raise ValueError("max_iter must be a non-negative integer.")
 
-        for m, (normal, offset) in enumerate(zip(N, c)):
-            unit_normal, constant_offset = ConvexProjectionSolver._normalise(normal, offset)
-            if ConvexProjectionSolver._is_in_half_space(z, unit_normal, constant_offset):
-                indices_to_remove[m] = True
-
-        new_N = N[~indices_to_remove]
-        new_c = c[~indices_to_remove]
-        return new_N, new_c
+        return z_array.copy(), N_array.copy(), c_array.copy(), int(max_iter)
 
     @staticmethod
     def _find_optimal_solution(point: np.ndarray, N: np.ndarray, c: np.ndarray,
-                               dimensions: int) -> np.ndarray:
+                               dimensions: int | None = None) -> np.ndarray:
         """
         Solves a quadratic programming problem to find the optimal solution that
         minimises the Euclidean distance between a given point and a target,
@@ -135,12 +170,17 @@ class ConvexProjectionSolver(ABC):
             point: Target point in space for optimisation.
             N: Constraint matrix G in the quadratic programming formulation.
             c: Constraint vector h in the quadratic programming formulation.
-            dimensions: Dimensionality of the space.
+            dimensions: Optional compatibility check for point dimensionality.
 
         Returns:
             np.ndarray: Optimal projection of the point.
         """
-        A = np.eye(dimensions)
+        if dimensions is not None and dimensions != point.size:
+            raise ValueError("dimensions must match the dimension of point.")
+        if N.shape[0] == 0:
+            return point.copy()
+
+        A = np.eye(point.size)
         b = point.copy()
         P = 2 * np.matmul(A.T, A)
         q = -2 * np.matmul(A.T, b)
@@ -179,7 +219,7 @@ class ConvexProjectionSolver(ABC):
 
     def __init__(self, z: np.ndarray, N: np.ndarray, c: np.ndarray,
                  max_iter: int, track_error: bool = False,
-                 min_error: float = 1e-3, dimensions: int = 2,
+                 min_error: float = 1e-3, dimensions: int | None = None,
                  plot_errors: bool = False,
                  plot_active_halfspaces: bool = False,
                  delete_spaces: bool = False):
@@ -193,22 +233,29 @@ class ConvexProjectionSolver(ABC):
             max_iter: Maximum number of iterations.
             track_error: Whether to track squared error at each iteration.
             min_error: Minimum error threshold for convergence.
-            dimensions: Number of dimensions.
+            dimensions: Optional consistency check. If omitted, inferred from z.
             plot_errors: Whether to track errors for plotting.
             plot_active_halfspaces: Whether to track active half-spaces.
-            delete_spaces: Whether to delete inactive half-spaces at start.
+            delete_spaces: Deprecated compatibility option. Constraints are retained
+                because initial satisfaction does not imply redundancy.
         """
-        self.z = z.copy()
+        self.z, self.N, self.c, self.max_iter = self._validate_problem(
+            z, N, c, max_iter, dimensions
+        )
         if delete_spaces:
-            self.N, self.c = self._delete_inactive_half_spaces(z, N, c)
-        else:
-            self.N = N.copy()
-            self.c = c.copy()
-        
-        self.max_iter = max_iter
+            warnings.warn(
+                "delete_spaces is deprecated and no longer removes constraints; "
+                "a constraint satisfied at the initial point can still determine "
+                "the projection.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         self.track_error = track_error
-        self.min_error = min_error
-        self.dimensions = dimensions
+        self.min_error = float(min_error)
+        if not np.isfinite(self.min_error) or self.min_error < 0:
+            raise ValueError("min_error must be a finite, non-negative value.")
+        self.dimensions = self.z.size
         self.plot_errors = plot_errors
         self.plot_active_halfspaces = plot_active_halfspaces
 
@@ -218,18 +265,20 @@ class ConvexProjectionSolver(ABC):
         self.errors = np.zeros_like(self.z)
         self.e = [self.errors.copy() for _ in range(self.n)]
         # Initialise errors_for_plotting as 3D NumPy array
-        self.errors_for_plotting: np.ndarray = np.zeros((max_iter, self.n, len(self.z)))
+        self.errors_for_plotting: np.ndarray = np.zeros(
+            (self.max_iter, self.n, len(self.z))
+        )
         # Track historical projections for path and quiver plotting, size max_iter + 1 for initial point
         self.x_historical: np.ndarray = np.zeros((self.max_iter + 1, self.n, len(self.z)))
         # Initialise first point as the initial point z
         self.x_historical[0, :, :] = self.z.copy()
-        self.actual_projection = self._find_optimal_solution(self.z, self.N, self.c, dimensions)
+        self.actual_projection = self._find_optimal_solution(self.z, self.N, self.c)
         # Active halfspaces tracking, sized for max_iter + 1 to include initial state
-        self.active_half_spaces: np.ndarray = np.zeros((self.n, max_iter + 1))
+        self.active_half_spaces: np.ndarray = np.zeros((self.n, self.max_iter + 1))
         # Error tracking arrays sized for max_iter + 1 to include initial error
-        self.squared_errors = np.zeros(max_iter + 1)
-        self.stalled_errors = np.zeros(max_iter + 1)
-        self.converged_errors = np.zeros(max_iter + 1)
+        self.squared_errors = np.zeros(self.max_iter + 1)
+        self.stalled_errors = np.full(self.max_iter + 1, np.nan)
+        self.converged_errors = np.full(self.max_iter + 1, np.nan)
 
     @abstractmethod
     def _update_error(self, m: int, x_temp: np.ndarray, x: np.ndarray, index: int) -> None:
@@ -296,19 +345,18 @@ class ConvexProjectionSolver(ABC):
         if self.track_error:
             distance = self.actual_projection - self.x
             error = round(np.dot(distance, distance), 10)
-            i_minus_one = (i - 1) % self.max_iter
-            is_equal1 = self.squared_errors[i_minus_one] == error
-            is_equal2 = self.stalled_errors[i_minus_one] == error
+            is_equal1 = i > 0 and self.squared_errors[i - 1] == error
+            is_equal2 = i > 0 and self.stalled_errors[i - 1] == error
 
             if error < self.min_error:
                 self.converged_errors[i] = error
-                self.stalled_errors[i] = None
+                self.stalled_errors[i] = np.nan
             elif is_equal1 or is_equal2:
                 self.stalled_errors[i] = error
-                self.converged_errors[i] = None
+                self.converged_errors[i] = np.nan
             else:
-                self.stalled_errors[i] = None
-                self.converged_errors[i] = None
+                self.stalled_errors[i] = np.nan
+                self.converged_errors[i] = np.nan
 
             self.squared_errors[i] = error
 
@@ -406,8 +454,8 @@ class DykstraMapHybridSolver(ConvexProjectionSolver):
     def __init__(self, *args, **kwargs):
         """Initialise the hybrid solver with separate error vectors for MAP and Dykstra."""
         super().__init__(*args, **kwargs)
-        self.e_dykstra = [self.errors] * self.n
-        self.e_MAP = [self.errors] * self.n
+        self.e_dykstra = [self.errors.copy() for _ in range(self.n)]
+        self.e_MAP = [self.errors.copy() for _ in range(self.n)]
 
     def _initialize_iteration(self, i: int) -> None:
         """
@@ -615,7 +663,7 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
 
 def dykstra_projection(z: np.ndarray, N: np.ndarray, c: np.ndarray,
                        max_iter: int, track_error: bool = False,
-                       min_error: float = 1e-3, dimensions: int = 2,
+                       min_error: float = 1e-3, dimensions: int | None = None,
                        plot_errors: bool = False,
                        plot_active_halfspaces: bool = False,
                        delete_spaces: bool = False) -> tuple:
