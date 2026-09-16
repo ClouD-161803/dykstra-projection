@@ -9,11 +9,11 @@ Functions:
     Checks if a point lies within a single half-space.
 - project_onto_half_space(point, normal, offset):
     Projects a given point onto a single half-space.
-- delete_inactive_half_spaces(z, N, c):
+- delete_inactive_half_spaces(z, A, b):
     Deletes inactive half-spaces and returns updated matrices.
-- find_optimal_solution(point, N, c, dimensions: int):
+- find_optimal_solution(point, A, b, dimensions: int):
     Computes the projection using QP optimisation (quadprog)
-- beta_check(point, N, c):
+- beta_check(point, A, b):
     Selects a value of beta based on whether the point lies within the
     intersection of half-spaces.
 """
@@ -71,10 +71,10 @@ def is_in_half_space(point: np.ndarray, unit_normal: np.ndarray,
 def project_onto_half_space(point: np.ndarray, normal: np.ndarray,
                             offset: np.ndarray) -> np.ndarray:
     """Projects a point onto a single half space 'H_i'.
-    A half space is defined by H_i := {x | <x,n_i> <= c_i}, with boundary
-    B_i := {x | <x,n_i> = c_i}, and the projection of a point z onto H_i is
-    given by: P_H_i(z) = z - (<z,n_i> - c_i)*n_i if z is outside H_i, where:
-    point = z, unit_normal  = n_i, constant_offset = c_i
+    A half space is defined by H_i := {x | <x,n_i> <= b_i}, with boundary
+    B_i := {x | <x,n_i> = b_i}, and the projection of a point z onto H_i is
+    given by: P_H_i(z) = z - (<z,n_i> - b_i)*n_i if z is outside H_i, where:
+    point = z, unit_normal  = n_i, constant_offset = b_i
 
     Args:
         point: Point to project.
@@ -98,25 +98,25 @@ def project_onto_half_space(point: np.ndarray, normal: np.ndarray,
         return boundary_projection
 
 
-def delete_inactive_half_spaces(z: np.ndarray, N: np.ndarray, c: np.ndarray)\
+def delete_inactive_half_spaces(z: np.ndarray, A: np.ndarray, b: np.ndarray)\
         -> tuple:
     """
     Deletes inactive half spaces.
 
     Args:
         z: Point used to check for inactive half spaces.
-        N: Matrix of normal vectors.
-        c: Vector of constant offsets.
+        A: Matrix of normal vectors.
+        b: Vector of constant offsets.
 
     Returns:
         tuple: Updated matrix of normal vectors and vector of constant offsets.
     """
 
     # Initialise empty removal mask
-    indices_to_remove = np.zeros_like(c, dtype=bool)
+    indices_to_remove = np.zeros_like(b, dtype=bool)
 
     # Update mask
-    for m, (normal, offset) in enumerate(zip(N, c)):
+    for m, (normal, offset) in enumerate(zip(A, b)):
         # Normalise
         unit_normal, constant_offset = normalise(normal, offset)
         # Check if half space is inactive
@@ -124,13 +124,13 @@ def delete_inactive_half_spaces(z: np.ndarray, N: np.ndarray, c: np.ndarray)\
             indices_to_remove[m] = True
 
     # Remove inactive halfspaces using mask
-    new_N = N[~indices_to_remove]
-    new_c = c[~indices_to_remove]
+    new_A = A[~indices_to_remove]
+    new_b = b[~indices_to_remove]
 
-    return new_N, new_c
+    return new_A, new_b
 
 
-def find_optimal_solution(point: np.ndarray, N: np.ndarray, c: np.ndarray,
+def find_optimal_solution(point: np.ndarray, A: np.ndarray, b: np.ndarray,
                           dimensions: int) -> np.ndarray:
     """
     Solves a quadratic programming problem to find the optimal solution that
@@ -146,10 +146,10 @@ def find_optimal_solution(point: np.ndarray, N: np.ndarray, c: np.ndarray,
     point : A 1D array representing the target point in space for the
             optimisation.
 
-    N : A 2D array representing the constraint matrix G in the quadratic
+    A : A 2D array representing the constraint matrix G in the quadratic
             programming formulation.
 
-    c : A 1D array representing the constraint vector h in the
+    b : A 1D array representing the constraint vector h in the
             quadratic programming formulation.
 
     dimensions : The dimensionality of the space in which
@@ -165,8 +165,8 @@ def find_optimal_solution(point: np.ndarray, N: np.ndarray, c: np.ndarray,
     This function uses the `quadprog_solve_qp` method to solve
     the quadratic programming problem.
     The quadratic objective function is reformulated as:
-        min_x ∥Ax − b∥^2
-    where A = identity matrix, b = point, P = 2 * A^T A, and q = −2 * A^T b.
+        min_x ∥Ix − point∥^2
+    where I is the identity matrix, P = 2 * I^T I, and q = −2 * I^T point.
 
     References:
     -----------
@@ -175,28 +175,27 @@ def find_optimal_solution(point: np.ndarray, N: np.ndarray, c: np.ndarray,
     """
 
     # Formulate the problem
-    A = np.eye(dimensions)
-    b = point.copy()
+    identity = np.eye(dimensions)
     # @ command is recommended
-    P = 2 * np.matmul(A.T, A)
-    q = -2 * np.matmul(A.T, b)
-    G = N
-    h = c
+    P = 2 * np.matmul(identity.T, identity)
+    q = -2 * np.matmul(identity.T, point)
+    G = A
+    h = b
 
     # Find projection using quadprog
     actual_projection = quadprog_solve_qp(P, q, G, h)
 
     return actual_projection
 
-def beta_check(point: np.ndarray, N: np.ndarray, c: np.ndarray):
+def beta_check(point: np.ndarray, A: np.ndarray, b: np.ndarray):
     """
     Selects a value of beta based on whether the passed point lies
     within the intersection of half-spaces.
 
     Args:
         point: Point to check.
-        N: Matrix of normal vectors.
-        c: Vector of constant offsets.
+        A: Matrix of normal vectors.
+        b: Vector of constant offsets.
 
     Returns:
         int: 1 if the point is within the intersection, else 0.
@@ -207,7 +206,7 @@ def beta_check(point: np.ndarray, N: np.ndarray, c: np.ndarray):
     not_in_intersection = False  # initialise boolean
     # I encountered numerical error problems
     rounded_point = np.around(point, decimals=10) # round to 10 decimal places
-    for _, (normal, offset) in enumerate(zip(N, c)):
+    for _, (normal, offset) in enumerate(zip(A, b)):
         # Normalise
         unit_normal, constant_offset = normalise(normal, offset)
         # Check if we are in the half space to update beta
