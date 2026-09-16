@@ -607,22 +607,24 @@ class VerticalVisualiser(Visualiser):
         Create a vertical layout visualisation with:
         - Main projection plot (top)
         - Error convergence plot (middle)
-        - Halfspace activity plots stacked vertically (bottom, smaller)
+        - A combined half-space activity plot (bottom)
 
         Args:
             plot_original_point: Original point z (optional).
             plot_optimal_point: Optimal solution (optional).
         """
-        # Determine grid height
+        # Reserve rows for the projection, error, and combined activity plots.
         if self.result.active_half_spaces is not None:
             num_halfspaces = self.result.active_half_spaces.shape[0]
-            total_rows = 4 + 3 + 2
+            total_rows = 9
         else:
             num_halfspaces = 0
             total_rows = 7
 
-        self.fig = plt.figure(figsize=(12, 10))
-        gs = gridspec.GridSpec(total_rows, 1)
+        self.fig = plt.figure(
+            figsize=(12, 12 if num_halfspaces else 10), layout="constrained"
+        )
+        gs = gridspec.GridSpec(total_rows, 1, figure=self.fig)
         
         self.ax_main = self.fig.add_subplot(gs[0:4, 0])
         self.ax_error = self.fig.add_subplot(gs[4:7, 0])
@@ -671,12 +673,10 @@ class VerticalVisualiser(Visualiser):
             self.ax_activity.set_yticklabels(['0', '1'], fontsize=self.fontsize_tick)
             self.ax_activity.tick_params(axis='x', which='major', labelsize=self.fontsize_tick)
             self.ax_activity.set_xlabel('Cycle', fontsize=self.fontsize_label)
-            self.ax_activity.set_ylabel('halfspace activity', fontsize=self.fontsize_label)
+            self.ax_activity.set_ylabel('Half-space activity', fontsize=self.fontsize_label)
             self.ax_activity.grid(True, axis='x', alpha=0.3)
             self.ax_activity.legend(loc='center right', fontsize=self.fontsize_legend)
 
-        plt.subplots_adjust(hspace=0.4)
-        plt.tight_layout()
         plt.show()
 
 
@@ -871,8 +871,8 @@ class ComparisonVisualiser:
 
     def visualise(self) -> None:
         
-        self.fig = plt.figure(figsize=(12, 12))
-        gs = gridspec.GridSpec(3, 1, height_ratios=[4, 3, 3])
+        self.fig = plt.figure(figsize=(12, 12), layout="constrained")
+        gs = gridspec.GridSpec(3, 1, figure=self.fig, height_ratios=[4, 3, 3])
         
         ax_top = self.fig.add_subplot(gs[0])
         ax_middle = self.fig.add_subplot(gs[1])
@@ -886,6 +886,4 @@ class ComparisonVisualiser:
         self.plot_error_comparison(ax_middle)
         self.plot_halfspace_comparison(ax_bottom)
         
-        plt.subplots_adjust(hspace=0.35)
-        plt.tight_layout()
         plt.show()
