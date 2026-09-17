@@ -67,7 +67,7 @@ class LTIVer5Solver(LTIVer4Solver):
         residual = self.z - candidate
         multipliers = np.zeros(self.n)
         if tight.size == 0:
-            if np.abs(residual).max() > 1e-11 * scale:
+            if np.abs(residual).max() > 1e-9 * scale:
                 return False
         else:
             multipliers_tight, *_ = np.linalg.lstsq(
@@ -77,7 +77,7 @@ class LTIVer5Solver(LTIVer4Solver):
                 return False
             multipliers_tight = np.clip(multipliers_tight, 0.0, None)
             if (np.abs(residual - self.unit_A[tight].T @ multipliers_tight).max()
-                    > 1e-11 * scale):
+                    > 1e-9 * scale):
                 return False
             multipliers[tight] = multipliers_tight
 
