@@ -102,6 +102,8 @@ while retaining exact cycles whenever that set changes. Each uses the same
 - `lti_ver4.py` fast-forwards frozen-stall episodes.
 - `lti_ver5.py` adds deflated modal episodes for rank-deficient active normals.
 - `oracle.py` records a known activity schedule and replays it for comparison.
+- `paper_figures.py` rebuilds the write-up's figures from these solvers.
+- `performance_timing.py` times the solvers to a fixed accuracy on your machine.
 
 Run any version from the working-code directory; every solver has a matching
 runner, for example:
@@ -110,6 +112,20 @@ runner, for example:
 cd "Python/Working Version"
 python run_lti_ver5.py
 python run_oracle.py
+```
+
+`paper_figures.py` writes each figure as a PNG and a PDF into `results/paper`.
+Its last figure solves a 96-plane problem twice and takes a couple of minutes;
+the other three are analytic and immediate.
+
+`performance_timing.py` measures how long each solver needs to reach a squared
+error of `1e-3`, reports the median cycles and milliseconds per problem size,
+and plots the growth order. Timings are your own hardware's, so they will not
+match published ones; edit `TIERS` to change the sizes and the repeat count.
+
+```bash
+python paper_figures.py
+python performance_timing.py
 ```
 
 ## Examples and exports
@@ -163,6 +179,8 @@ python -m unittest discover -s tests -v
 │   │   ├── lti_examples.py       # Shared LTI demo setup
 │   │   ├── lti_ver1.py … lti_ver5.py
 │   │   ├── oracle.py             # Activity-schedule replay experiment
+│   │   ├── paper_figures.py      # Write-up figure rebuilds
+│   │   ├── performance_timing.py # Solver timing on the local machine
 │   │   └── bin/                 # Legacy helper implementations
 │   └── Previous Versions/       # Development history
 ├── results/                     # Saved experiment output
