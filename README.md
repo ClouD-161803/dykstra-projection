@@ -2,8 +2,8 @@
 
 This repository contains a Python implementation of Dykstra's algorithm for
 projecting a point onto the intersection of finitely many half-spaces. It also
-includes experimental MAP/Dykstra and stalling-aware variants, 2-D
-visualisations, result export utilities, and the accompanying LaTeX report.
+includes experimental MAP/Dykstra, stalling-aware, and LTI-accelerated variants,
+2-D visualisations, result export utilities, and the accompanying LaTeX report.
 
 ## Requirements
 
@@ -89,6 +89,29 @@ corresponding flags:
 traces. `VerticalVisualiser` combines the activity traces on one lower axis.
 `ComparisonVisualiser` supports side-by-side solver comparisons.
 
+## LTI solver experiments
+
+The `lti_ver*.py` modules are research-oriented accelerations of Dykstra's
+method. They exploit episodes in which the active half-space set is unchanged,
+while retaining exact cycles whenever that set changes. Each uses the same
+`A @ x <= b` problem definition as the core solvers.
+
+- `lti_ver1.py` applies a linear cycle map while the active set is fixed.
+- `lti_ver2.py` evaluates constant-activity episodes in closed form.
+- `lti_ver3.py` adds envelope-bounded jumps over certified switch-free cycles.
+- `lti_ver4.py` fast-forwards frozen-stall episodes.
+- `lti_ver5.py` adds deflated modal episodes for rank-deficient active normals.
+- `oracle.py` records a known activity schedule and replays it for comparison.
+
+Run any version from the working-code directory; every solver has a matching
+runner, for example:
+
+```bash
+cd "Python/Working Version"
+python run_lti_ver5.py
+python run_oracle.py
+```
+
 ## Examples and exports
 
 Run the comparison used for the paper from the working-code directory:
@@ -137,6 +160,9 @@ python -m unittest discover -s tests -v
 │   │   ├── projection_result.py
 │   │   ├── gradient.py
 │   │   ├── edge_rounder.py
+│   │   ├── lti_examples.py       # Shared LTI demo setup
+│   │   ├── lti_ver1.py … lti_ver5.py
+│   │   ├── oracle.py             # Activity-schedule replay experiment
 │   │   └── bin/                 # Legacy helper implementations
 │   └── Previous Versions/       # Development history
 ├── results/                     # Saved experiment output
