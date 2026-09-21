@@ -139,9 +139,9 @@ python -m unittest discover -s tests -v
 ```text
 .
 ├── README.md
+├── AGENTS.md                    # operating guide for coding agents
+├── ARCHITECTURE.md              # how the code is put together
 ├── requirements.txt
-├── Application/                 # Applications and project deliverables
-├── Books & Articles/            # Research papers and notes
 ├── Latex/
 │   ├── Current Version/         # Current report and paper sources
 │   │   └── Sections/
@@ -175,9 +175,14 @@ The code uses `quadprog` to obtain a reference projection for error reporting.
 This reference is useful for experiments, but a finite number of Dykstra cycles
 is generally an approximation rather than an exact projection.
 
-The mathematical report and related materials live under
-[`Latex/Current Version`](Latex/Current%20Version) and
-[`Books & Articles`](Books%20%26%20Articles).
+The mathematical report lives under
+[`Latex/Current Version`](Latex/Current%20Version).
+
+The reference papers and the grant-application material are not in this
+repository. They are third-party or personal documents that are not ours to
+redistribute, so they are kept outside it, alongside the checkout, and both
+directory names are gitignored. The report's bibliography is the list of
+references.
 
 ## Author and funding
 
