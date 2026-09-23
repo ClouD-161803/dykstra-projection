@@ -16,7 +16,7 @@ __pycache__/
 # Operating-system files
 .DS_Store
 
-# Reference PDFs and grant-application material. Moved to ../dykstra-projection-materials/
+# Reference PDFs and grant-application material. Moved to ../materials/
 # because this repo is public and neither the papers nor the department's documents are ours
 # to redistribute. Ignored so a restored copy cannot be committed back by accident.
 Books & Articles/
