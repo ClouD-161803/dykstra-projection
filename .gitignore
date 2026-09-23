@@ -7,11 +7,26 @@ __pycache__/
 
 # IDE files
 .idea/
+.vscode/
 /shelf/
 /workspace.xml
 /httpRequests/
 /dataSources/
 /dataSources.local.xml
+
+# LaTeX build output
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+
+# Editor backups
+*.bak
 
 # Operating-system files
 .DS_Store
