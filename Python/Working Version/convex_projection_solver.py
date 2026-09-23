@@ -545,6 +545,12 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
     in a single iteration.
     """
 
+    # Plain Dykstra rounds each e_m once per cycle, drifting from the linear
+    # drain by about N * eps * d_m over N cycles: a whole cycle's drain once N
+    # nears 1/sqrt(eps), so a longer jump cannot reproduce it. At a fixed point
+    # the active slacks are rounding noise and ask for about 1/eps cycles.
+    MAX_SKIP_CYCLES = np.finfo(float).eps ** -0.5
+
     def __init__(self, *args, **kwargs):
         """Initialise the stall detection solver with additional tracking."""
         super().__init__(*args, **kwargs)
@@ -552,6 +558,8 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
         self.k_stalling = 1
         self.m_stalling = None
         self.prev_x_no_ffw = None
+        self.frozen_visits = 0
+        self.active_at_last_visit = np.zeros(self.n, dtype=bool)
 
     def _update_error(self, m: int, x_temp: np.ndarray, x: np.ndarray, index: int) -> None:
         """
@@ -567,29 +575,51 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
 
     def _handle_stalling(self, i: int) -> None:
         """
-        Handle stalling detection and fast-forwarding.
+        Fast-forward through a detected stall.
+
+        While the frozen cycle repeats, an active half-space m changes only
+        d_m = e_m . a_m, by its constant slack s_m = a_m^T x_{m-1} - b_m per
+        visit, and turns inactive on visit ceil(d_m / -s_m). With N the least
+        such count over draining half-spaces (s_m < 0), N - 1 cycles are
+        skipped and the switching cycle runs normally.
 
         Args:
             i: Current iteration.
         """
-        if self.stalling and self.m_stalling is not None:
-            n_fast_forward = int(min(
-                [np.ceil(- np.dot(self.e[m], normal) / (np.dot(self.x_historical[i][m-1], normal) - offset))
-                 if np.dot(self.x_historical[i][m-1], normal) < offset else 1e6
-                 for m, (normal, offset) in enumerate(zip(self.A, self.b))]
-            ))
-            n_fast_forward -= 1
+        if not (self.stalling and self.m_stalling is not None):
+            return
+        self.stalling = False
+        self.m_stalling = None
+        self.frozen_visits = 0
 
-            print(f"Fast forwarding {n_fast_forward} rounds to exit stalling at iteration {i}. ")
+        # The frozen window's outputs; entry m - 1 is the input to half-space m.
+        visits = self.x_historical[i]
+        cycles_to_switch = np.inf
+        for m, (normal, offset) in enumerate(zip(self.A, self.b)):
+            if not self.active_at_last_visit[m]:
+                # One that has just turned inactive moved its input by its old
+                # e_m, and the next cycle will not repeat that.
+                if not np.array_equal(visits[m], visits[m - 1]):
+                    return
+                continue
+            unit_normal, constant_offset = self._normalise(normal, offset)
+            slack = np.dot(visits[m - 1], unit_normal) - constant_offset
+            if slack < 0:
+                cycles_to_switch = min(cycles_to_switch,
+                                       np.dot(self.e[m], unit_normal) / -slack)
+        if cycles_to_switch > self.MAX_SKIP_CYCLES:
+            return
+        n_fast_forward = max(int(np.ceil(cycles_to_switch)), 1) - 1
+        if n_fast_forward == 0:
+            return
 
-            # Update all errors for the following round
-            for m, (normal, offset) in enumerate(zip(self.A, self.b)):
-                self.e[m] = self.e[m] + n_fast_forward * (self.x_historical[i][m-1] - self.x_historical[i][m])
-                if not self._is_in_half_space(self.x + self.e[(m - self.n) % self.n], normal, offset):
-                    self.active_half_spaces[m][i] = 1
+        print(f"Fast forwarding {n_fast_forward} rounds to exit stalling at iteration {i}. ")
 
-            self.stalling = False
-            self.m_stalling = None
+        # Inactive half-spaces pass their input through, so they gain nothing.
+        for m, (normal, offset) in enumerate(zip(self.A, self.b)):
+            self.e[m] = self.e[m] + n_fast_forward * (visits[m - 1] - visits[m])
+            if not self._is_in_half_space(self.x + self.e[(m - self.n) % self.n], normal, offset):
+                self.active_half_spaces[m][i] = 1
 
     def solve(self) -> ProjectionResult:
         """
@@ -615,8 +645,11 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
                 # Handle stalling detection and fast-forward
                 self._handle_stalling(i)
 
-                # Check if current point is in the halfspace
-                self._check_activity(m, i, x_temp, normal, offset, index)
+                # Check if current point is in the halfspace. Taken from the
+                # projection branch because an inactive e_m can keep a rounding
+                # residue with e_m . a_m > 0.
+                self.active_at_last_visit[m] = self._check_activity(
+                    m, i, x_temp, normal, offset, index)
 
                 # Update x_m+1
                 self.x = self._project_onto_half_space(x_temp + self.e[index], normal, offset)
@@ -627,13 +660,16 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
                 # Store historical data for path and quiver plotting, offset by 1
                 self.x_historical[i + 1][m] = self.x.copy()
 
-                # Check for stalling
-                if i > 0:
-                    if ((not self.stalling) and (self.active_half_spaces[m][i] == 1) and
-                            np.array_equal(self.x_historical[i + 1][m], self.x_historical[i][m])):
-                        self.stalling = True
-                        self.m_stalling = m
-                        print(f"Stalling detected at iteration {i} and half-space {self.m_stalling}")
+                # Stalling as in Definition 1: the last n visits all repeat their
+                # outputs from one cycle earlier. A single repeating visit is not
+                # enough; a partly frozen cycle fed jumps plain Dykstra never makes.
+                if i > 0 and np.array_equal(self.x_historical[i + 1][m], self.x_historical[i][m]):
+                    self.frozen_visits += 1
+                else:
+                    self.frozen_visits = 0
+                if self.frozen_visits >= self.n:
+                    self.stalling = True
+                    self.m_stalling = m
 
                 # Errors
                 if self.plot_errors:
