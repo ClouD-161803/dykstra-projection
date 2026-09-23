@@ -18,3 +18,9 @@ __pycache__/
 
 # Generated figures
 Python/Working Version/results/paper/
+
+# Reference PDFs and grant-application material. Moved to ../materials/
+# because this repo is public and neither the papers nor the department's documents are ours
+# to redistribute. Ignored so a restored copy cannot be committed back by accident.
+Books & Articles/
+Application/
