@@ -606,6 +606,26 @@ class LTISolverRegressionTests(unittest.TestCase):
         np.testing.assert_array_equal(result.active_half_spaces[:, 2], [1, 1, 0, 1])
         np.testing.assert_allclose(result.projection / scale, dykstra / scale, rtol=0.0, atol=1e-12)
 
+    def test_modal_scan_keeps_a_draining_row_watched_at_any_scale(self) -> None:
+        # No normal touches the third coordinate, so the episode with all three rows
+        # active is deflated and, with the certificate set aside, scanned modally; row 2
+        # drains by 0.29 * scale per cycle and Dykstra drops it on cycle 7. A drain
+        # tolerance fixed at 1e-9 cleared it at small scales and jumped the budget with
+        # it still active
+        z = np.array([1.0, -1.5, 0.0])
+        A = np.array([[1.5, -1.0, 0.0], [-0.5, 1.0, 0.0], [0.5, 0.5, 0.0]])
+        b = np.array([-0.5, -2.0, -2.0])
+        for scale in (1.0, 1e-9, 1e-12):
+            with self.subTest(scale=scale):
+                dykstra = DykstraProjectionSolver(scale * z, A, scale * b, max_iter=20).solve()
+                solver = LTIVer5Solver(scale * z, A, scale * b, max_iter=20, block_size=4)
+                solver._kkt_certificate = lambda hint, active: None
+                result = solver.solve()
+                self.assertFalse(result.is_settled())
+                np.testing.assert_allclose(result.path / scale, dykstra.path / scale, rtol=0.0, atol=1e-12)
+                np.testing.assert_allclose(result.projection / scale, dykstra.projection / scale,
+                                           rtol=0.0, atol=1e-12)
+
     def test_deflated_episode_switching_on_its_first_cycle_keeps_the_dykstra_state(self) -> None:
         # Rows 1-3 span three of the four coordinates, so their episode is deflated,
         # and their cycle map is nearly defective (eigenvector condition about 6e7).
@@ -655,6 +675,27 @@ class LTISolverRegressionTests(unittest.TestCase):
                     if not result.is_settled():
                         np.testing.assert_allclose(result.projection, result.path[-1, -1],
                                                    rtol=0.0, atol=1e-12)
+
+    def test_deflated_episode_stays_on_the_dykstra_path_when_the_resolvent_is_ill_conditioned(self) -> None:
+        # Rows 0 and 1 are 4.4e-4 rad apart and the last coordinate is free, so the
+        # episode of rows 0, 1 and 3 is deflated with cond(I - A_m + P_1) about 1.2e7;
+        # it cannot be certified, scans one cycle and switches on cycle 4, and an
+        # explicit inverse moves the state it switches from by about 1e-9
+        z = np.array([-6.0, 0.0, 37.0, -33.0])
+        A = np.array([
+            [2.269, 1.999, 0.634, 0.0],
+            [2.267, 1.999, 0.634, 0.0],
+            [-0.997, 1.345, -0.725, 0.0],
+            [-0.222, -1.105, 0.245, 0.0],
+        ])
+        b = np.array([23.01, 23.0, -12.42, 2.96])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=5).solve()
+
+        result = LTIVer5Solver(z, A, b, max_iter=5).solve()
+        end = result.settled_at if result.is_settled() else 6
+        self.assertGreaterEqual(end, 5)
+        np.testing.assert_allclose(result.path[:end], dykstra.path[:end], rtol=0.0,
+                                   atol=1e-12 * np.abs(z).max())
 
     def test_oracle_jump_matches_dykstra_when_the_resolvent_is_ill_conditioned(self) -> None:
         # Normals about 1e-4 rad apart give cond(I - A_m) of about 7e7, below the cutoff
