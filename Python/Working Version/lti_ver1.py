@@ -134,6 +134,9 @@ class LTIVer1Solver(ConvexProjectionSolver):
         if self.plot_active_halfspaces:
             self._record_activity(1, active)
         if self.n == 0:
+            # Without constraints the state never moves, so every cycle repeats cycle 1
+            for cycle in range(2, self.max_iter + 1):
+                self._track_error(cycle)
             return self._format_output()
         self._build_cycle_map(active)
 
