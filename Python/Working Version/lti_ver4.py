@@ -6,21 +6,18 @@ import numpy as np
 from lti_ver2 import _RESOLVENT_COND_CAP
 from lti_ver3 import LTIVer3Solver
 
-# A cycle that moves the state by less than this leaves it frozen
-_MOTION_TOL = 1e-9
-
-# Motion of the state times jump length allowed while treating the state as frozen
-_MOTION_BUDGET = 1e-9
-
 
 class LTIVer4Solver(LTIVer3Solver):
     """Frozen-stall fast-forward."""
 
     def _is_stalled(self, x: np.ndarray | None = None) -> bool:
         """Cycle leaves the state unchanged."""
+        # Frozen means fixed to rounding, coordinate by coordinate: holding a state
+        # that still moves, however slowly, would leave Dykstra's path
         x = self.x if x is None else x
-        x_next = self.A_m @ x + self.B_m
-        return float(np.linalg.norm(x_next - x)) < _MOTION_TOL
+        motion = np.abs(self.A_m @ x + self.B_m - x)
+        floor = self._rounding_floor(np.abs(self.A_m) @ np.abs(x) + np.abs(self.B_m) + np.abs(x))
+        return bool(np.all(motion <= floor))
 
     def _stall_crossing(self, y: np.ndarray, delta: np.ndarray, delta_floor: np.ndarray,
                         active: np.ndarray) -> float:
@@ -61,18 +58,14 @@ class LTIVer4Solver(LTIVer3Solver):
         # Inactive auxiliaries are zero; every auxiliary moves by delta per cycle,
         # which is zero only up to rounding
         y = np.where(active, y, 0.0)
-        motion = float(np.linalg.norm(self.A_m @ x + self.B_m - x))
         delta = self.R @ x + self.s
         delta_floor = self._rounding_floor(np.abs(self.R) @ np.abs(x) + self.s_scale)
 
-        # No jump when the crossing lies beyond the budget or the motion of the
-        # state over the jump would exceed the budget
+        # No jump when the crossing lies beyond the budget
         crossing = self._stall_crossing(y, delta, delta_floor, active)
         if crossing > self.max_iter - start_cycle + 1:
             return None
         k = int(crossing) - 1
-        if motion * max(k, 1) > _MOTION_BUDGET:
-            return None
 
         # Apply the k increments at once, the state staying frozen, then switch
         if k >= 1:
