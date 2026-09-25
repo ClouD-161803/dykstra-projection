@@ -294,9 +294,10 @@ class LTISolverRegressionTests(unittest.TestCase):
                 result = solver.solve()
                 np.testing.assert_allclose(result.projection, solver.actual_projection, rtol=0.0, atol=1e-12)
 
-    def test_closed_form_stays_on_the_dykstra_path_when_the_resolvent_is_ill_conditioned(self) -> None:
-        # Two normals 1e-5 rad apart give cond(I - A_m) of about 2.3e10, below the cutoff
-        # of the closed form; an explicit inverse loses about cond * eps there
+    def test_episode_above_the_resolvent_cutoff_stays_on_the_dykstra_path(self) -> None:
+        # Two normals 1e-5 rad apart give cond(I - A_m) of about 2.3e10, above the cutoff,
+        # so the episode is stepped; a closed form with an explicit inverse once left the
+        # path here by 3e-7
         theta = 1e-5
         z = np.array([3.0, 2.0, 0.0])
         A = np.array([[1.0, 0.0, 0.0], [np.cos(theta), np.sin(theta), 0.0], [1.0, 1.0, -1.0]])
