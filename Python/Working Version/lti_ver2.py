@@ -27,11 +27,12 @@ class LTIVer2Solver(LTIVer1Solver):
         self.x = x
         self._commit_auxiliaries(y, active)
 
-    def _setup_closed_form(self, IA_inv: np.ndarray) -> _CF:
+    def _setup_closed_form(self, IA: np.ndarray) -> _CF:
         """Constants of the closed form."""
-        # Fixed point x_inf = (I - A_m)^-1 B_m and the transient z_0 = x - x_inf
-        x_inf = IA_inv @ self.B_m
-        RIA = self.R @ IA_inv
+        # Fixed point x_inf = (I - A_m)^-1 B_m and the transient z_0 = x - x_inf, by
+        # solves rather than an explicit inverse, which loses cond * eps
+        x_inf = np.linalg.solve(IA, self.B_m)
+        RIA = np.linalg.solve(IA.T, self.R.T).T
         active = np.array(self.active)
         z_0 = self.x - x_inf
 
@@ -75,9 +76,9 @@ class LTIVer2Solver(LTIVer1Solver):
         for later_cycle in range(cycle, self.max_iter + 1):
             self._record_cycle(later_cycle, cf.active)
 
-    def _closed_form_episode(self, start_cycle: int, IA_inv: np.ndarray) -> int | None:
+    def _closed_form_episode(self, start_cycle: int, IA: np.ndarray) -> int | None:
         """Scan an episode to its switch."""
-        cf = self._setup_closed_form(IA_inv)
+        cf = self._setup_closed_form(IA)
         z_prev = self.x - cf.x_inf
         for t in range(1, self.max_iter - start_cycle + 2):
             cycle = start_cycle + t - 1
@@ -122,7 +123,7 @@ class LTIVer2Solver(LTIVer1Solver):
             # The closed form needs I - A_m invertible, i.e. active normals spanning the space
             IA = np.eye(p) - self.A_m
             if np.linalg.cond(IA) < 1e12:
-                switch_cycle = self._closed_form_episode(cycle, np.linalg.inv(IA))
+                switch_cycle = self._closed_form_episode(cycle, IA)
             else:
                 switch_cycle = self._step_episode(cycle)
             if switch_cycle is None:

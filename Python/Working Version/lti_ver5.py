@@ -43,7 +43,7 @@ class LTIVer5Solver(LTIVer4Solver):
             # Closed form when I - A_m is invertible, deflated episode when it is singular
             IA = np.eye(p) - self.A_m
             if np.linalg.cond(IA) < 1e12:
-                switch_cycle = self._closed_form_episode(cycle, np.linalg.inv(IA))
+                switch_cycle = self._closed_form_episode(cycle, IA)
             else:
                 switch_cycle = self._deflated_episode(cycle)
             if switch_cycle is None:
@@ -121,11 +121,10 @@ class LTIVer5Solver(LTIVer4Solver):
         IAP = np.eye(p) - self.A_m + P_1
         if np.linalg.cond(IAP) >= 1e12:
             return self._step_episode(start_cycle)
-        IAP_inv = np.linalg.inv(IAP)
 
         # Deflated fixed point and the closed-form constants of the episode
-        x_inf = P_1 @ self.x + IAP_inv @ (self.B_m - P_1 @ self.B_m)
-        RIA = self.R @ IAP_inv
+        x_inf = P_1 @ self.x + np.linalg.solve(IAP, self.B_m - P_1 @ self.B_m)
+        RIA = np.linalg.solve(IAP.T, self.R.T).T
         z_0 = self.x - x_inf
         cf = _CF(A_m=self.A_m, x_inf=x_inf, RIA=RIA,
                  G=self.y + RIA @ z_0, beta=self.R @ x_inf + self.s,
