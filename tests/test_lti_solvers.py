@@ -963,6 +963,21 @@ class LTISolverRegressionTests(unittest.TestCase):
                 np.testing.assert_allclose(result.path[:2], dykstra.path[:2], rtol=0.0, atol=1e-15)
                 np.testing.assert_allclose(result.path[2:, -1], 0.0, rtol=0.0, atol=1e-15)
 
+    def test_ver5_does_not_certify_a_support_the_multipliers_hide(self) -> None:
+        # Rows 1 and 2 are nearly opposite, so their multipliers are about 4e5, some 2e6
+        # times the step; a residual allowance that grew with the multipliers certified
+        # the origin, 1.4e-4 from the projection, on a support that wrongly included row 0
+        z = np.array([-0.07577692101135602, 0.18673898434503639, -0.06516834048056444])
+        A = np.array([[-0.4380088189358778, -0.10129851157554232, -0.6653495525127452],
+                      [-0.6408313305526512, -0.4716795185046132, -0.6056844373148239],
+                      [0.640831133821352, 0.47168000387038733, 0.6056842674810631]])
+        b = np.zeros(3)
+        reference_solver = DykstraProjectionSolver(z, A, b, max_iter=10)
+        dykstra = reference_solver.solve().projection
+        result = LTIVer5Solver(z, A, b, max_iter=10).solve()
+        expected = reference_solver.actual_projection if result.is_settled() else dykstra
+        np.testing.assert_allclose(result.projection, expected, rtol=0.0, atol=1e-9 * np.abs(z).max())
+
     def test_idle_member_below_zero_does_not_block_an_envelope_jump(self) -> None:
         # Rows 0 and 1 are one equality whose idle member's level sits a rounding below
         # zero while another row drains; an envelope that gave that level no rounding
