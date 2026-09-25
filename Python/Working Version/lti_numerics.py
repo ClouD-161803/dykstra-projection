@@ -25,8 +25,8 @@ _KKT_CANDIDATE_TOL = 1e-7
 # nearly dependent rows leave the choice among them to rounding
 _KKT_EXHAUSTIVE_ROWS = 6
 
-# Error certified for the projection, relative to the step from z and the multiplier
-# terms; the stationarity residual of a feasible, complementary point bounds it
+# Error certified for the projection, relative to the step from z; the stationarity
+# residual of a feasible, complementary point bounds it
 _KKT_ACCURACY = 1e-9
 
 # The cycle map of an episode: A_m and B_m carry a cycle's start to its end, row m of
@@ -423,10 +423,12 @@ def _kkt_verify(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray, support: 
     if tight.size:
         multipliers[tight] = nonnegative_least_squares(unit_A[tight].T, step)
 
-    # x is then the projection of z - r, so the residual r bounds its error
+    # x is then the projection of z - r, so the residual r bounds its error. The
+    # multiplier terms enter only at rounding: they grow as the tight normals become
+    # nearly dependent, and letting them loosen the accuracy certified wrong supports
     residual = step - unit_A.T @ multipliers
-    allowed = (_KKT_ACCURACY * (np.abs(step) + np.abs(unit_A).T @ multipliers)
-               + rounding_floor(np.abs(z) + np.abs(x)))
+    allowed = (_KKT_ACCURACY * np.abs(step)
+               + rounding_floor(np.abs(z) + np.abs(x) + np.abs(unit_A).T @ multipliers))
     if np.any(np.abs(residual) > allowed):
         return None
     return x, multipliers
