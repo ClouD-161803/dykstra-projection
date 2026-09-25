@@ -240,8 +240,7 @@ class LTIVer5Solver(LTIVer4Solver):
 
         # Orthonormal basis Q of the span of the active normals; P_1 projects onto
         # its complement, the kernel of I - A_m, where the state never moves
-        U, sigma, _ = np.linalg.svd(self.unit_A[active_idx].T, full_matrices=False)
-        Q = U[:, sigma > 1e-12 * sigma[0]]
+        Q = self.span
         P_1 = np.eye(p) - Q @ Q.T
         IAP = np.eye(p) - self.A_m + P_1
         if np.linalg.cond(IAP) >= _RESOLVENT_COND_CAP:

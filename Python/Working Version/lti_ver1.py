@@ -104,9 +104,19 @@ class LTIVer1Solver(ConvexProjectionSolver):
         self.s_scale = s_scale
         self.active = tuple(active)
 
+        # Orthonormal basis of the active normals, the only directions a cycle moves
+        active_rows = np.where(np.array(active))[0]
+        self.span = np.zeros((p, 0))
+        if active_rows.size:
+            U, sigma, _ = np.linalg.svd(self.unit_A[active_rows].T, full_matrices=False)
+            self.span = U[:, sigma > 1e-12 * sigma[0]]
+
     def _advance_cycle(self) -> None:
         """Advance one cycle by the map."""
-        self.x = self.A_m @ self.x + self.B_m
+        # Confining the rounded step to the span stops the kernel component, which
+        # no cycle moves, from drifting by a rounding error per cycle
+        step = self.A_m @ self.x + self.B_m - self.x
+        self.x = self.x + self.span @ (self.span.T @ step)
 
     def _activity_check(self) -> tuple:
         """Predict the next active set."""
