@@ -41,6 +41,12 @@ def rounding_floor(magnitude: np.ndarray) -> np.ndarray:
     return _ROUNDING_UNITS * np.finfo(float).eps * magnitude
 
 
+def unit_constraints(A: np.ndarray, b: np.ndarray) -> tuple:
+    """Unit normals and their offsets."""
+    norms = np.array([np.linalg.norm(row) for row in A]).reshape(-1, 1)
+    return A / norms, b / norms[:, 0]
+
+
 def exact_cycle(x: np.ndarray, y: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray) -> tuple:
     """One exact Dykstra cycle."""
     # Dykstra's correction for a half-space is always a multiple of its unit normal,

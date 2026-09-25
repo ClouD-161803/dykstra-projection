@@ -23,7 +23,8 @@ from convex_projection_solver import ConvexProjectionSolver
 from lti_numerics import (RESOLVENT_COND_CAP, RHO_CAP, ClosedForm, active_auxiliaries,
                           active_set_is_final, advance, closed_form, closed_form_activity,
                           cycle_map, deflated_closed_form, exact_cycle, is_frozen, jump_length,
-                          kkt_certificate, predicted_activity, rounding_floor, stall_crossing)
+                          kkt_certificate, predicted_activity, rounding_floor, stall_crossing,
+                          unit_constraints)
 from projection_result import ProjectionResult
 
 PRESETS = ("cycle_map", "closed_form", "envelope", "frozen_stall", "deflated_modal")
@@ -85,10 +86,7 @@ class LTISolver(ConvexProjectionSolver):
 
     def solve(self) -> ProjectionResult:
         """Project the point."""
-        self.unit_A = np.empty_like(self.A)
-        self.unit_b = np.empty_like(self.b)
-        for index, (row, offset) in enumerate(zip(self.A, self.b)):
-            self.unit_A[index], self.unit_b[index] = self._normalise(row, offset)
+        self.unit_A, self.unit_b = unit_constraints(self.A, self.b)
         self.y = np.zeros(self.n)
         self._recorded_y = np.zeros(self.n)
 
