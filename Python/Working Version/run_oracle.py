@@ -1,7 +1,7 @@
 """Records one Dykstra run's active-set schedule and replays it with the oracle."""
 
 import time
-from lti_ver5 import LTIVer5Solver
+from lti_solver import LTIVer5Solver
 from lti_examples import box_line_problem
 from oracle import oracle_lti_projection, record_schedule
 
