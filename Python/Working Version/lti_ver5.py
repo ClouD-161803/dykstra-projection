@@ -123,7 +123,7 @@ class LTIVer5Solver(LTIVer4Solver):
                 switch_cycle = self._closed_form_episode(cycle, IA)
             else:
                 switch_cycle = self._deflated_episode(cycle)
-            if switch_cycle is None:
+            if switch_cycle is None or switch_cycle > self.max_iter:
                 return
             self._perform_switch(switch_cycle)
             cycle = switch_cycle + 1
@@ -282,9 +282,7 @@ class LTIVer5Solver(LTIVer4Solver):
             # A frozen state is fast-forwarded straight to its switching cycle
             x_t, y_t = self._modal_state(cf, Q, V, lam, coords, mu, t)
             if self._is_stalled(x_t):
-                switch_cycle = self._stall_episode(start_cycle + t, x_t, y_t, active)
-                if switch_cycle is not None:
-                    return switch_cycle
+                return self._stall_episode(start_cycle + t, x_t, y_t, active)
 
             # Auxiliaries y_m and slacks g_j at every cycle of the block
             block = min(self.block_size, self.max_iter - (start_cycle + t) + 1)
