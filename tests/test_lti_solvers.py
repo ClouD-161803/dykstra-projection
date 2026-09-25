@@ -1063,6 +1063,26 @@ class LTISolverRegressionTests(unittest.TestCase):
                         np.testing.assert_allclose(result.projection, solver.actual_projection,
                                                    rtol=0.0, atol=1e-12)
 
+    def test_finality_does_not_wait_on_an_inactive_idle_member_at_the_origin(self) -> None:
+        # Rows 0 and 1 are one equality through the origin whose idle member is inactive
+        # from the first cycle; its row of R is a cancellation, whose norm the finality
+        # test read as a real slack until the transient underflowed, while the same
+        # problem moved off the origin settles on cycle 2
+        z = np.array([1.181417612852829, -1.8432602139116518])
+        A = np.array([[0.4690544106234305, -0.8831692702278008],
+                      [-0.4690544106234305, 0.8831692702278008],
+                      [0.635163198935966, -0.7723779584616786]])
+        shift = np.array([0.3, -0.2])
+        placements = {"origin": (z, np.zeros(3)), "shifted": (z + shift, A @ shift)}
+        for placement, (z_placed, b) in placements.items():
+            for solver_type in (LTIVer2Solver, LTIVer3Solver, LTIVer4Solver):
+                with self.subTest(placement=placement, solver=solver_type.__name__):
+                    solver = solver_type(z_placed, A, b, max_iter=1000)
+                    result = solver.solve()
+                    self.assertEqual(result.certificate, "finality")
+                    self.assertLessEqual(result.settled_at, 5)
+                    np.testing.assert_allclose(result.projection, solver.actual_projection, rtol=0.0, atol=1e-9)
+
     def test_stall_jump_leaves_a_drained_auxiliary_to_the_exact_cycle(self) -> None:
         # Row 0's auxiliary drains to exactly 0 on cycle 65 with the state frozen; Dykstra
         # drops the row there, but the stepped prediction keeps it active at zero, and a
