@@ -21,10 +21,10 @@ from collections import namedtuple
 import numpy as np
 from convex_projection_solver import ConvexProjectionSolver
 from lti_numerics import (RESOLVENT_COND_CAP, RHO_CAP, ClosedForm, active_auxiliaries,
-                          active_set_is_final, advance, closed_form, closed_form_activity,
-                          cycle_map, deflated_closed_form, exact_cycle, is_frozen, jump_length,
-                          kkt_certificate, predicted_activity, rounding_floor, stall_crossing,
-                          unit_constraints)
+                          active_set_is_final, advance, auxiliary_floor, closed_form,
+                          closed_form_activity, cycle_map, deflated_closed_form, exact_cycle,
+                          is_frozen, jump_length, kkt_certificate, predicted_activity,
+                          rounding_floor, stall_crossing, unit_constraints)
 from projection_result import ProjectionResult
 
 PRESETS = ("cycle_map", "closed_form", "envelope", "frozen_stall", "deflated_modal")
@@ -200,7 +200,7 @@ class LTISolver(ConvexProjectionSolver):
             y_t = active_auxiliaries(cf, t, z_t)
 
             # Stop just before the cycle on which the active set changes
-            if not np.array_equal(closed_form_activity(cf, self.cmap, y_t, z_prev), cf.active):
+            if not np.array_equal(closed_form_activity(cf, self.cmap, t, y_t, z_t, z_prev), cf.active):
                 self._set_state(cf.x_inf + z_prev, active_auxiliaries(cf, t - 1, z_prev))
                 return _switch(cycle)
 
@@ -225,7 +225,8 @@ class LTISolver(ConvexProjectionSolver):
             z_before = np.linalg.matrix_power(cf.A_m, k - 1) @ z_t
             z_after = cf.A_m @ z_before
             y_after = active_auxiliaries(cf, t + k, z_after)
-            if np.array_equal(closed_form_activity(cf, self.cmap, y_after, z_before), cf.active):
+            if np.array_equal(closed_form_activity(cf, self.cmap, t + k, y_after, z_after, z_before),
+                              cf.active):
                 self._set_state(cf.x_inf + z_after, y_after)
                 for later_cycle in range(cycle + 1, cycle + k + 1):
                     self._record_cycle(later_cycle)
@@ -259,7 +260,7 @@ class LTISolver(ConvexProjectionSolver):
             lam_t = lam ** t
             return cf.x_inf + (Q @ (V @ (lam_t * coords))).real, cf.G + t * cf.beta - (mu @ lam_t).real
 
-        # An inactive half-space reactivates only on a slack above rounding
+        # Activity changes only on a value beyond rounding, as in closed_form_activity
         g_floor = cf.beta_floor + rounding_floor(self.cmap.R_scale @ np.abs(Q) @ (np.abs(V) @ np.abs(coords)))
 
         # Scan in blocks; a half-space cleared by its envelope leaves the watch set
@@ -278,7 +279,8 @@ class LTISolver(ConvexProjectionSolver):
             lam_powers_prev = lam[None, :] ** (t_range[:, None] - 1)
             y_vals = cf.G[None, :] + t_range[:, None] * cf.beta[None, :] - (lam_powers @ mu.T).real
             g_vals = cf.beta[None, :] + (lam_powers_prev @ nu.T).real
-            signs = np.where(active[None, :], y_vals > 0.0, g_vals > g_floor[None, :])
+            y_floor = auxiliary_floor(cf, t_range[:, None]) + rounding_floor(np.abs(lam_powers) @ env_y.T)
+            signs = np.where(active[None, :], y_vals > -y_floor, g_vals > g_floor[None, :])
             flip_rows = np.where(((signs != active[None, :]) & watch[None, :]).any(axis=1))[0]
 
             # Stop just before the first cycle whose signs differ from the active set;
@@ -344,8 +346,9 @@ class LTISolver(ConvexProjectionSolver):
 
     def _set_state(self, x: np.ndarray, y: np.ndarray) -> None:
         """Set the state within the episode."""
+        # An active auxiliary kept within rounding of zero stays nonnegative, as in Dykstra
         self.x = x
-        self.y = np.where(self.cmap.active, y, 0.0)
+        self.y = np.where(self.cmap.active, np.maximum(y, 0.0), 0.0)
 
     # ---- recording
 
