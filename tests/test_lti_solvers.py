@@ -941,6 +941,13 @@ class LTISolverRegressionTests(unittest.TestCase):
                 np.testing.assert_allclose(result.path[:2], dykstra.path[:2], rtol=0.0, atol=1e-15)
                 np.testing.assert_allclose(result.path[2:, -1], 0.0, rtol=0.0, atol=1e-15)
 
+    def test_record_schedule_rejects_an_invalid_budget(self) -> None:
+        z, A, b = box_line_problem()
+        for max_iter in (-1, 1.5, True):
+            with self.subTest(max_iter=max_iter):
+                with self.assertRaisesRegex(ValueError, "max_iter"):
+                    record_schedule(z, A, b, max_iter)
+
 
 if __name__ == "__main__":
     unittest.main()
