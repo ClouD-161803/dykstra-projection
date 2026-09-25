@@ -87,8 +87,7 @@ class LTIVer3Solver(LTIVer2Solver):
             z_before = np.linalg.matrix_power(cf.A_m, k - 1) @ z_t
             z_after = cf.A_m @ z_before
             y_after = self._active_auxiliaries(cf, t + k, z_after)
-            g_after = cf.beta + self.R @ z_before
-            if np.array_equal(np.where(cf.active, y_after, g_after) > 0.0, cf.active):
+            if np.array_equal(self._predicted_activity(cf, y_after, z_before), cf.active):
                 self._set_state(cf.x_inf + z_after, y_after, cf.active)
                 for later_cycle in range(cycle + 1, cycle + k + 1):
                     self._record_cycle(later_cycle, cf.active)
@@ -107,8 +106,7 @@ class LTIVer3Solver(LTIVer2Solver):
             # Transient z_t = A_m z_{t-1}, auxiliaries y_m and slacks g_j at cycle t
             z_t = cf.A_m @ z_prev
             y_t = self._active_auxiliaries(cf, t, z_t)
-            g_t = cf.beta + self.R @ z_prev
-            active_t = np.where(cf.active, y_t, g_t) > 0.0
+            active_t = self._predicted_activity(cf, y_t, z_prev)
 
             # Stop just before the cycle on which the active set changes
             if not np.array_equal(active_t, cf.active):

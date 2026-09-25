@@ -274,6 +274,9 @@ class LTIVer5Solver(LTIVer4Solver):
         env_y = np.abs(mu)
         env_g = np.abs(nu)
 
+        # An inactive half-space reactivates only on a slack above rounding
+        g_floor = cf.beta_floor + self._rounding_floor(env_g.sum(axis=1))
+
         # Scan in blocks; a half-space cleared by its envelope leaves the watch set
         watch = np.ones(self.n, dtype=bool)
         t = 0
@@ -290,8 +293,8 @@ class LTIVer5Solver(LTIVer4Solver):
             lam_powers_prev = lam[None, :] ** (t_range[:, None] - 1)
             y_vals = cf.G[None, :] + t_range[:, None] * cf.beta[None, :] - (lam_powers @ mu.T).real
             g_vals = cf.beta[None, :] + (lam_powers_prev @ nu.T).real
-            vals = np.where(active[None, :], y_vals, g_vals)
-            flips = ((vals > 0.0) != active[None, :]) & watch[None, :]
+            signs = np.where(active[None, :], y_vals > 0.0, g_vals > g_floor[None, :])
+            flips = (signs != active[None, :]) & watch[None, :]
             flip_rows = np.where(flips.any(axis=1))[0]
 
             # Stop just before the first cycle whose signs differ from the active set;
@@ -313,7 +316,7 @@ class LTIVer5Solver(LTIVer4Solver):
             # Clear every half-space whose envelope rules out a sign change at every
             # later cycle; once all are cleared the active set is final
             decay = abs_lam ** t
-            clear_inactive = cf.inactive & (cf.beta + env_g @ decay < 0.0)
+            clear_inactive = cf.inactive & (cf.beta + env_g @ decay <= g_floor)
             clear_active = (cf.active & (cf.beta >= -cf.beta_floor)
                             & (cf.G + (t + 1) * cf.beta - env_y @ (decay * abs_lam) > 0.0))
             watch &= ~(clear_inactive | clear_active)

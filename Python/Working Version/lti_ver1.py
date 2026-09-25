@@ -110,10 +110,16 @@ class LTIVer1Solver(ConvexProjectionSolver):
 
     def _activity_check(self) -> tuple:
         """Predict the next active set."""
-        # Increment of every auxiliary over one cycle from the current state
+        # Increment of every auxiliary over one cycle from the current state. Activity
+        # changes only on a value beyond rounding, since the idle member of an equality
+        # written as two half-spaces never shows more than rounding; a row kept active
+        # keeps a nonnegative auxiliary
         delta = self.R @ self.x + self.s
         y_next = self.y + delta
-        return tuple(y_next > 0.0), y_next
+        floor = self._rounding_floor(np.abs(self.y) + np.abs(self.R) @ np.abs(self.x) + self.s_scale)
+        active = np.array(self.active)
+        active_next = np.where(active, y_next > -floor, delta > floor)
+        return tuple(active_next), np.where(active, np.maximum(y_next, 0.0), y_next)
 
     def _replay_cycle(self, cycle: int, active: tuple | np.ndarray) -> None:
         """Record an episode cycle as Dykstra runs it."""
