@@ -24,8 +24,8 @@ class ProjectionResult:
         settled_at: First cycle whose recorded state is the limit rather than that
             cycle's Dykstra iterate, for the LTI solvers that settle (None otherwise).
         certificate: How the settlement was proven: "kkt" when the limit passed the
-            KKT test and is the projection itself, "finality" when the active set was
-            proven final and the limit is the fixed point of the last cycle map.
+            KKT test and is the projection to its accuracy, "finality" when the active
+            set was proven final and the limit is the fixed point of the last cycle map.
     """
     projection: np.ndarray
     path: np.ndarray | None = None
