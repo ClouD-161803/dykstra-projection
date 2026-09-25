@@ -259,19 +259,19 @@ class LTISolver(ConvexProjectionSolver):
         # Modes lambda_i of the contracting block T = Q^T A_m Q, and the modal
         # coefficients mu (auxiliaries) and nu (slacks) of the transient
         Q = self.cmap.span
-        lam, V = np.linalg.eig(Q.T @ self.cmap.A_m @ Q)
-        if np.max(np.abs(lam)) >= 1.0 - 1e-12 or np.linalg.cond(V) >= self.eig_cond_cap:
+        modes, V = np.linalg.eig(Q.T @ self.cmap.A_m @ Q)
+        if np.max(np.abs(modes)) >= 1.0 - 1e-12 or np.linalg.cond(V) >= self.eig_cond_cap:
             return self._step_episode(start_cycle)
         coords = np.linalg.solve(V, Q.T @ (self.x - cf.x_inf))
         mu = (cf.RIA @ Q) @ V * coords[None, :]
         nu = (self.cmap.R @ Q) @ V * coords[None, :]
-        abs_lam, env_y, env_g = np.abs(lam), np.abs(mu), np.abs(nu)
+        moduli, env_y, env_g = np.abs(modes), np.abs(mu), np.abs(nu)
         env_y_scale = (cf.RIA_scale @ np.abs(Q)) @ np.abs(V) * np.abs(coords)[None, :]
 
         def modal_state(t: int) -> tuple:
             """State and auxiliaries at cycle t."""
-            lam_t = lam ** t
-            return cf.x_inf + (Q @ (V @ (lam_t * coords))).real, cf.G + t * cf.beta - (mu @ lam_t).real
+            powers = modes ** t
+            return cf.x_inf + (Q @ (V @ (powers * coords))).real, cf.G + t * cf.beta - (mu @ powers).real
 
         # Activity changes only on a value beyond rounding, as in closed_form_activity
         g_floor = cf.beta_floor + rounding_floor(self.cmap.R_scale @ np.abs(Q) @ (np.abs(V) @ np.abs(coords)))
@@ -288,11 +288,11 @@ class LTISolver(ConvexProjectionSolver):
             # Auxiliaries y_m and slacks g_j at every cycle of the block
             block = min(self.block_size, self.max_iter - (start_cycle + t) + 1)
             t_range = np.arange(t + 1, t + block + 1)
-            lam_powers = lam[None, :] ** t_range[:, None]
-            lam_powers_prev = lam[None, :] ** (t_range[:, None] - 1)
-            y_vals = cf.G[None, :] + t_range[:, None] * cf.beta[None, :] - (lam_powers @ mu.T).real
-            g_vals = cf.beta[None, :] + (lam_powers_prev @ nu.T).real
-            y_floor = auxiliary_floor(cf, t_range[:, None]) + rounding_floor(np.abs(lam_powers) @ env_y_scale.T)
+            powers = modes[None, :] ** t_range[:, None]
+            powers_prev = modes[None, :] ** (t_range[:, None] - 1)
+            y_vals = cf.G[None, :] + t_range[:, None] * cf.beta[None, :] - (powers @ mu.T).real
+            g_vals = cf.beta[None, :] + (powers_prev @ nu.T).real
+            y_floor = auxiliary_floor(cf, t_range[:, None]) + rounding_floor(np.abs(powers) @ env_y_scale.T)
             signs = np.where(active[None, :], y_vals > -y_floor, g_vals > g_floor[None, :])
             flip_rows = np.where(((signs != active[None, :]) & watch[None, :]).any(axis=1))[0]
 
@@ -314,10 +314,10 @@ class LTISolver(ConvexProjectionSolver):
 
             # Clear every half-space whose envelope rules out a sign change at every
             # later cycle; once all are cleared the active set is final
-            decay = abs_lam ** t
+            decay = moduli ** t
             clear_inactive = cf.inactive & (cf.beta + env_g @ decay <= g_floor)
             clear_active = (cf.active & (cf.beta >= -cf.beta_floor)
-                            & (cf.G + (t + 1) * cf.beta - env_y @ (decay * abs_lam) > 0.0))
+                            & (cf.G + (t + 1) * cf.beta - env_y @ (decay * moduli) > 0.0))
             watch &= ~(clear_inactive | clear_active)
             if not watch.any():
                 return self._settle_final(cf, start_cycle + t - 1, t)
