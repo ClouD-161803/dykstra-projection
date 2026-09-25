@@ -47,9 +47,8 @@ def oracle_lti_projection(z: np.ndarray, A: np.ndarray, b: np.ndarray,
             active = np.array(active)
             if np.linalg.cond(IA) < 1e12:
                 # Jump the remaining k - 1 cycles in closed form
-                IA_inv = np.linalg.inv(IA)
-                x_inf = IA_inv @ solver.B_m
-                RIA = solver.R @ IA_inv
+                x_inf = np.linalg.solve(IA, solver.B_m)
+                RIA = np.linalg.solve(IA.T, solver.R.T).T
                 z_0 = solver.x - x_inf
                 G = solver.y + RIA @ z_0
                 beta = solver.R @ x_inf + solver.s

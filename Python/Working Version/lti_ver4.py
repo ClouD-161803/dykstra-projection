@@ -82,7 +82,7 @@ class LTIVer4Solver(LTIVer3Solver):
             # singular and the state is frozen, exact stepping otherwise
             IA = np.eye(p) - self.A_m
             if np.linalg.cond(IA) < 1e12:
-                switch_cycle = self._closed_form_episode(cycle, np.linalg.inv(IA))
+                switch_cycle = self._closed_form_episode(cycle, IA)
             else:
                 switch_cycle = self._stall_episode(cycle) if self._is_stalled() else None
                 if switch_cycle is None:

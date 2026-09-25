@@ -45,9 +45,9 @@ def rigorous_deactivation_horizon(G: float, beta: float, alpha: float, rho: floa
 class LTIVer3Solver(LTIVer2Solver):
     """Envelope-bounded episode jumps."""
 
-    def _setup_closed_form(self, IA_inv: np.ndarray) -> _CF:
+    def _setup_closed_form(self, IA: np.ndarray) -> _CF:
         """Constants and spectral norm."""
-        cf = super()._setup_closed_form(IA_inv)
+        cf = super()._setup_closed_form(IA)
         self.rho = min(float(np.linalg.svd(cf.A_m, compute_uv=False)[0]), _RHO_CAP)
         return cf
 
@@ -96,9 +96,9 @@ class LTIVer3Solver(LTIVer2Solver):
             k //= 2
         return 0, z_t
 
-    def _closed_form_episode(self, start_cycle: int, IA_inv: np.ndarray) -> int | None:
+    def _closed_form_episode(self, start_cycle: int, IA: np.ndarray) -> int | None:
         """Scan an episode with jumps."""
-        cf = self._setup_closed_form(IA_inv)
+        cf = self._setup_closed_form(IA)
         z_prev = self.x - cf.x_inf
         t = 1
         while start_cycle + t - 1 <= self.max_iter:
