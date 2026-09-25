@@ -4,7 +4,7 @@ in blocks, settling by a KKT test on the episode limit, and jumping frozen
 stalls to their crossing."""
 
 import numpy as np
-from lti_ver2 import _BETA_TOL, _CF
+from lti_ver2 import _CF
 from lti_ver4 import LTIVer4Solver
 
 
@@ -129,6 +129,7 @@ class LTIVer5Solver(LTIVer4Solver):
         z_0 = self.x - x_inf
         cf = _CF(A_m=self.A_m, x_inf=x_inf, RIA=RIA,
                  G=self.y + RIA @ z_0, beta=self.R @ x_inf + self.s,
+                 beta_floor=self._drift_floor(x_inf),
                  row_RIA=np.linalg.norm(RIA, axis=1), row_R=np.linalg.norm(self.R, axis=1),
                  active=active, inactive=~active)
         if self._certified_settle(cf, start_cycle):
@@ -186,7 +187,7 @@ class LTIVer5Solver(LTIVer4Solver):
             # later cycle; once all are cleared the active set is final
             decay = abs_lam ** t
             clear_inactive = cf.inactive & (cf.beta + env_g @ decay < 0.0)
-            clear_active = (cf.active & (cf.beta >= -_BETA_TOL)
+            clear_active = (cf.active & (cf.beta >= -cf.beta_floor)
                             & (cf.G + (t + 1) * cf.beta - env_y @ (decay * abs_lam) > 0.0))
             watch &= ~(clear_inactive | clear_active)
             if not watch.any():
