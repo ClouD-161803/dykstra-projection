@@ -38,7 +38,7 @@ CycleMap = namedtuple("CycleMap", "active A_m B_m R R_scale s s_scale span")
 # Constants of one episode's closed form: its fixed point x_inf, RIA = R (I - A_m)^-1
 # and the magnitudes RIA_scale its rounding comes from, the levels G and drifts beta
 # of the auxiliaries (floors Gamma on inactive rows), the rounding levels of G and
-# beta, the row norms of RIA and R, and the activity masks
+# beta, the row norms of RIA and of R beyond its rounding, and the activity masks
 ClosedForm = namedtuple("ClosedForm", "A_m x_inf RIA RIA_scale G G_floor beta beta_floor row_RIA "
                                       "row_R active inactive")
 
@@ -145,7 +145,8 @@ def _closed_form(cmap: CycleMap, x: np.ndarray, y: np.ndarray, x_inf: np.ndarray
     # per cycle, and the rounding level of each. A row of R that cancelled to the
     # rounding of the magnitudes it was formed from is noise, and so is its row of RIA:
     # only such a row takes its rounding from those magnitudes through the resolvent,
-    # since charging every row with the resolvent's condition would hide real drains
+    # since charging every row with the resolvent's condition would hide real drains,
+    # and only what exceeds that rounding counts as a slack's envelope
     active = np.array(cmap.active)
     z_0 = x - x_inf
     R_norm = np.linalg.norm(cmap.R, axis=1)
@@ -158,7 +159,7 @@ def _closed_form(cmap: CycleMap, x: np.ndarray, y: np.ndarray, x_inf: np.ndarray
                       G_floor=rounding_floor(np.abs(y) + RIA_scale @ np.abs(z_0)),
                       beta=cmap.R @ x_inf + cmap.s,
                       beta_floor=rounding_floor(cmap.R_scale @ np.abs(x_inf) + cmap.s_scale),
-                      row_RIA=np.linalg.norm(RIA, axis=1), row_R=np.linalg.norm(cmap.R, axis=1),
+                      row_RIA=np.linalg.norm(RIA, axis=1), row_R=np.maximum(R_norm - R_rounding, 0.0),
                       active=active, inactive=~active)
 
 
