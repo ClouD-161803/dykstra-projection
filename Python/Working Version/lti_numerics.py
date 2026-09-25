@@ -336,18 +336,19 @@ def _lawson_hanson(k: int, gradient, solve) -> np.ndarray:
 def nonnegative_least_squares(C: np.ndarray, d: np.ndarray) -> np.ndarray:
     """min ||C l - d|| over l >= 0."""
     # Each support is solved on the columns of C, not the normal equations, whose
-    # conditioning is squared
-    eps = np.finfo(float).eps
-    floor = eps * max(C.shape) * np.abs(C).max(initial=0.0) * np.abs(d).max(initial=0.0)
-    return _lawson_hanson(C.shape[1], lambda lam: C.T @ (d - C @ lam) - floor,
+    # conditioning is squared. A gradient entry counts as positive only above the
+    # rounding of the terms summed into it, so a row of C that is zero, a coordinate no
+    # normal touches, raises no entry's threshold
+    abs_C = np.abs(C)
+    return _lawson_hanson(C.shape[1],
+                          lambda lam: C.T @ (d - C @ lam) - rounding_floor(abs_C.T @ (np.abs(d) + abs_C @ lam)),
                           lambda P: np.linalg.lstsq(C[:, P], d, rcond=None)[0])
 
 
 def nonnegative_quadratic(H: np.ndarray, c: np.ndarray) -> np.ndarray:
     """min 1/2 l^T H l - c^T l over l >= 0, H positive semidefinite."""
-    eps = np.finfo(float).eps
-    floor = eps * len(c) * (np.abs(H).max(initial=0.0) + np.abs(c).max(initial=0.0))
-    return _lawson_hanson(len(c), lambda lam: c - H @ lam - floor,
+    abs_H = np.abs(H)
+    return _lawson_hanson(len(c), lambda lam: c - H @ lam - rounding_floor(np.abs(c) + abs_H @ lam),
                           lambda P: np.linalg.lstsq(H[np.ix_(P, P)], c[P], rcond=None)[0])
 
 
