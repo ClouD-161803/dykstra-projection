@@ -406,10 +406,17 @@ def kkt_certificate(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray,
 def _kkt_verify(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray, support: np.ndarray) -> tuple | None:
     """KKT test at the projection onto a support."""
     # The projection of z onto the boundaries of the support, by least squares, which
-    # is backward stable however nearly parallel the rows are
+    # is backward stable however nearly parallel the rows are. The step lies in the
+    # span of the support's normals, so a coordinate none of them touches keeps z's
+    # value. Least squares leaves rounding there on the scale of the whole correction,
+    # while the allowance there is built from that coordinate alone and can be far
+    # smaller, so the true support would fail
     x = z.copy()
     if support.size:
-        x -= np.linalg.lstsq(unit_A[support], unit_A[support] @ z - unit_b[support], rcond=None)[0]
+        rows = unit_A[support]
+        correction = np.linalg.lstsq(rows, rows @ z - unit_b[support], rcond=None)[0]
+        correction[~np.any(rows != 0.0, axis=0)] = 0.0
+        x -= correction
 
     # Feasible, and multipliers nonnegative on the tight rows only, both at rounding
     # level, so complementarity holds to rounding
