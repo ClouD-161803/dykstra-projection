@@ -2,8 +2,8 @@
 
 This repository contains a Python implementation of Dykstra's algorithm for
 projecting a point onto the intersection of finitely many half-spaces. It also
-includes experimental MAP/Dykstra and stalling-aware variants, 2-D
-visualisations, result export utilities, and the accompanying LaTeX report.
+includes experimental MAP/Dykstra, stalling-aware, and LTI-accelerated variants,
+2-D visualisations, result export utilities, and the accompanying LaTeX report.
 
 ## Requirements
 
@@ -89,6 +89,30 @@ corresponding flags:
 traces. `VerticalVisualiser` combines the activity traces on one lower axis.
 `ComparisonVisualiser` supports side-by-side solver comparisons.
 
+## LTI solver experiments
+
+`lti_solver.py` holds research-oriented accelerations of Dykstra's method. Between changes of the active half-space set, Dykstra's iteration is a linear time-invariant system, so an episode of constant activity can be stepped through its cycle map, evaluated in closed form or skipped, with one exact Dykstra cycle whenever the set changes. They use the same `A @ x <= b` problem definition as the core solvers.
+
+`LTISolver` runs one of five presets, each adding one technique to the one before so that their effect can be compared. `LTIVer1Solver` to `LTIVer5Solver` name them:
+
+- `cycle_map` (`LTIVer1Solver`) steps every cycle through the episode's cycle map.
+- `closed_form` (`LTIVer2Solver`) evaluates regular episodes in closed form and settles once the active set is proven final.
+- `envelope` (`LTIVer3Solver`) also jumps the runs of cycles an envelope bound certifies switch-free.
+- `frozen_stall` (`LTIVer4Solver`) also fast-forwards frozen stalls, in which only the auxiliaries move.
+- `deflated_modal` (`LTIVer5Solver`) also scans singular episodes in their deflated modal form, and settles only on a point that passes the KKT test.
+
+Every preset returns Dykstra's own iterate after `max_iter` cycles unless it settles first, and records the same path, errors and corrections as `DykstraProjectionSolver` up to that point. A settled result holds the limit from `result.settled_at` on, and `result.certificate` says how it was proven: `"kkt"` means the point passed the KKT conditions and is the projection, to within `1e-9` of the distance moved beyond the rounding of the data, which nearly dependent active normals amplify; `"finality"` means the active set was proven final, with drifts below rounding taken as zero, and the point is the fixed point of the last cycle map. `result.is_settled()` tells a settled limit from the last iterate.
+
+`lti_numerics.py` holds the numerical pieces free of solver state. `oracle.py` uses them too: it records one Dykstra run's activity schedule and replays it with every change known in advance, for comparison.
+
+Run any preset from the working-code directory; each has a matching runner, for example:
+
+```bash
+cd "Python/Working Version"
+python run_lti_ver5.py
+python run_oracle.py
+```
+
 ## Examples and exports
 
 Run the comparison used for the paper from the working-code directory:
@@ -137,6 +161,10 @@ python -m unittest discover -s tests -v
 │   │   ├── projection_result.py
 │   │   ├── gradient.py
 │   │   ├── edge_rounder.py
+│   │   ├── lti_solver.py         # LTISolver and its five presets
+│   │   ├── lti_numerics.py       # Cycle maps, closed forms, the KKT test
+│   │   ├── lti_examples.py       # Shared LTI demo setup
+│   │   ├── oracle.py             # Activity-schedule replay experiment
 │   │   └── bin/                 # Legacy helper implementations
 │   └── Previous Versions/       # Development history
 ├── results/                     # Saved experiment output
