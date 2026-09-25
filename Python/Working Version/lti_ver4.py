@@ -49,7 +49,7 @@ class LTIVer4Solver(LTIVer3Solver):
 
     def _stall_episode(self, start_cycle: int, x: np.ndarray | None = None,
                        y: np.ndarray | None = None,
-                       active: np.ndarray | None = None) -> int | None:
+                       active: np.ndarray | None = None) -> int:
         """Fast-forward a frozen stall."""
         x = self.x if x is None else x
         y = self.y if y is None else y
@@ -61,11 +61,12 @@ class LTIVer4Solver(LTIVer3Solver):
         delta = self.R @ x + self.s
         delta_floor = self._rounding_floor(np.abs(self.R) @ np.abs(x) + self.s_scale)
 
-        # No jump when the crossing lies beyond the budget
+        # Jump to the cycle before the crossing, or through the rest of the budget
+        # when the crossing lies beyond it; a return past max_iter means the budget
+        # ran out while frozen
+        remaining = self.max_iter - start_cycle + 1
         crossing = self._stall_crossing(y, delta, delta_floor, active)
-        if crossing > self.max_iter - start_cycle + 1:
-            return None
-        k = int(crossing) - 1
+        k = int(crossing) - 1 if crossing <= remaining else remaining
 
         # Apply the k increments at once, the state staying frozen, then switch
         if k >= 1:
@@ -74,21 +75,33 @@ class LTIVer4Solver(LTIVer3Solver):
                 self._record_cycle(cycle, active)
         return start_cycle + k
 
+    def _step_episode(self, start_cycle: int) -> int | None:
+        """Step an episode, fast-forwarding stalls."""
+        # A state can freeze part-way through an episode; probing at offsets 0, 1,
+        # 2, 4, ... keeps the probes logarithmic in the episode length
+        next_probe = start_cycle
+        for cycle in range(start_cycle, self.max_iter + 1):
+            if cycle == next_probe:
+                next_probe += max(1, cycle - start_cycle)
+                if self._is_stalled():
+                    return self._stall_episode(cycle)
+            if not self._step_cycle(cycle):
+                return cycle
+        return None
+
     def _accelerate(self, start_cycle: int) -> None:
         """Run episodes to the budget."""
         p = len(self.x)
         cycle = start_cycle
         while cycle <= self.max_iter:
-            # Closed form when I - A_m is invertible, stall fast-forward when it is
-            # singular and the state is frozen, exact stepping otherwise
+            # Closed form when I - A_m is invertible, otherwise exact stepping that
+            # fast-forwards any frozen stall
             IA = np.eye(p) - self.A_m
             if np.linalg.cond(IA) < _RESOLVENT_COND_CAP:
                 switch_cycle = self._closed_form_episode(cycle, IA)
             else:
-                switch_cycle = self._stall_episode(cycle) if self._is_stalled() else None
-                if switch_cycle is None:
-                    switch_cycle = self._step_episode(cycle)
-            if switch_cycle is None:
+                switch_cycle = self._step_episode(cycle)
+            if switch_cycle is None or switch_cycle > self.max_iter:
                 return
             self._perform_switch(switch_cycle)
             cycle = switch_cycle + 1

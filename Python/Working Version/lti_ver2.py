@@ -107,16 +107,22 @@ class LTIVer2Solver(LTIVer1Solver):
             z_prev = z_t
         return None
 
+    def _step_cycle(self, cycle: int) -> bool:
+        """Step one cycle unless it switches."""
+        active_next, y_next = self._activity_check()
+        if tuple(active_next) != self.active:
+            self._sync_e_from_y()
+            return False
+        self._commit_auxiliaries(y_next, np.array(active_next))
+        self._advance_cycle()
+        self._record_cycle(cycle, active_next)
+        return True
+
     def _step_episode(self, start_cycle: int) -> int | None:
         """Step a singular episode."""
         for cycle in range(start_cycle, self.max_iter + 1):
-            active_next, y_next = self._activity_check()
-            if tuple(active_next) != self.active:
-                self._sync_e_from_y()
+            if not self._step_cycle(cycle):
                 return cycle
-            self._commit_auxiliaries(y_next, np.array(active_next))
-            self._advance_cycle()
-            self._record_cycle(cycle, active_next)
         return None
 
     def _accelerate(self, start_cycle: int) -> None:
