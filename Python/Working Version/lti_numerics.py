@@ -32,8 +32,9 @@ CycleMap = namedtuple("CycleMap", "active A_m B_m R R_scale s s_scale span")
 
 # Constants of one episode's closed form: its fixed point x_inf, RIA = R (I - A_m)^-1,
 # the levels G and drifts beta of the auxiliaries (floors Gamma on inactive rows), the
-# rounding level of beta, the row norms of RIA and R, and the activity masks
-ClosedForm = namedtuple("ClosedForm", "A_m x_inf RIA G beta beta_floor row_RIA row_R active inactive")
+# rounding levels of G and beta, the row norms of RIA and R, and the activity masks
+ClosedForm = namedtuple("ClosedForm",
+                        "A_m x_inf RIA G G_floor beta beta_floor row_RIA row_R active inactive")
 
 
 def rounding_floor(magnitude: np.ndarray) -> np.ndarray:
@@ -135,10 +136,12 @@ def _closed_form(cmap: CycleMap, x: np.ndarray, y: np.ndarray, x_inf: np.ndarray
                  RIA: np.ndarray) -> ClosedForm:
     """Constants around a fixed point."""
     # Level G_m of each auxiliary without its transient z_0 = x - x_inf, drift beta_m
-    # per cycle, and the rounding level of that drift
+    # per cycle, and the rounding level of each
     active = np.array(cmap.active)
-    beta = cmap.R @ x_inf + cmap.s
-    return ClosedForm(A_m=cmap.A_m, x_inf=x_inf, RIA=RIA, G=y + RIA @ (x - x_inf), beta=beta,
+    z_0 = x - x_inf
+    return ClosedForm(A_m=cmap.A_m, x_inf=x_inf, RIA=RIA, G=y + RIA @ z_0,
+                      G_floor=rounding_floor(np.abs(y) + np.abs(RIA) @ np.abs(z_0)),
+                      beta=cmap.R @ x_inf + cmap.s,
                       beta_floor=rounding_floor(cmap.R_scale @ np.abs(x_inf) + cmap.s_scale),
                       row_RIA=np.linalg.norm(RIA, axis=1), row_R=np.linalg.norm(cmap.R, axis=1),
                       active=active, inactive=~active)
@@ -173,24 +176,37 @@ def active_auxiliaries(cf: ClosedForm, t: int, z_t: np.ndarray) -> np.ndarray:
     return cf.G + t * cf.beta - cf.RIA @ z_t
 
 
-def closed_form_activity(cf: ClosedForm, cmap: CycleMap, y_t: np.ndarray, z_prev: np.ndarray) -> np.ndarray:
-    """Signs of a cycle's auxiliaries and slacks."""
-    # Slack g_j = beta_j + R_j z_{t-1}; an inactive half-space reactivates only on a
-    # slack above rounding
+def auxiliary_floor(cf: ClosedForm, t) -> np.ndarray:
+    """Rounding of the auxiliaries extrapolated to cycle t."""
+    # A drift within rounding may be rounding of either sign, which extrapolation
+    # multiplies by t; a drift beyond it is real and decides on its own
+    return cf.G_floor + t * np.where(np.abs(cf.beta) <= cf.beta_floor, cf.beta_floor, 0.0)
+
+
+def closed_form_activity(cf: ClosedForm, cmap: CycleMap, t: int, y_t: np.ndarray,
+                         z_t: np.ndarray, z_prev: np.ndarray) -> np.ndarray:
+    """Activity of cycle t."""
+    # Activity changes only on a value beyond rounding: an inactive half-space
+    # reactivates on a slack g_j = beta_j + R_j z_{t-1} above it, and an active one
+    # deactivates on an auxiliary below minus the rounding its extrapolation carries,
+    # which is all the idle member of an equality written as two half-spaces shows
     g_t = cf.beta + cmap.R @ z_prev
-    floor = cf.beta_floor + rounding_floor(cmap.R_scale @ np.abs(z_prev))
-    return np.where(cf.active, y_t > 0.0, g_t > floor)
+    g_floor = cf.beta_floor + rounding_floor(cmap.R_scale @ np.abs(z_prev))
+    y_floor = auxiliary_floor(cf, t) + rounding_floor(np.abs(cf.RIA) @ np.abs(z_t))
+    return np.where(cf.active, y_t > -y_floor, g_t > g_floor)
 
 
 def active_set_is_final(cf: ClosedForm, t: int, z_t: np.ndarray) -> bool:
     """No further activity change."""
     # Every later transient is bounded by the current ||z_t||; a drift is zero only up
-    # to rounding, since any real drain reaches zero eventually, and an inactive slack
-    # must stay within the rounding its prediction ignores
+    # to rounding, since any real drain reaches zero eventually, an inactive slack must
+    # stay within the rounding its prediction ignores, and an active auxiliary need only
+    # stay above minus the rounding of its extrapolation, as in closed_form_activity
     z_norm = float(np.linalg.norm(z_t))
     active_ok = not cf.active.any() or (
         np.all(cf.beta[cf.active] >= -cf.beta_floor[cf.active])
-        and np.all(cf.G[cf.active] + t * cf.beta[cf.active] - cf.row_RIA[cf.active] * z_norm > 0.0))
+        and np.all(cf.G[cf.active] + t * cf.beta[cf.active] - cf.row_RIA[cf.active] * z_norm
+                   > -auxiliary_floor(cf, t)[cf.active]))
     inactive_ok = not cf.inactive.any() or np.all(
         cf.beta[cf.inactive] + cf.row_R[cf.inactive] * z_norm <= cf.beta_floor[cf.inactive])
     return active_ok and inactive_ok
