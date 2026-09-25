@@ -4,7 +4,7 @@ How the code in `Python/Working Version/` is put together, and which of its prop
 
 ## 1. Scope and nongoals
 
-One author's research code behind a paper. It is not a library: no package, no installer, no stable API, no versioning. Callers are `main.py`, `paper_figure.py` and the test suite, all inside this repository.
+One author's research code behind a paper. It is not a library: no package, no installer, no stable API, no versioning. Callers are `main.py`, `paper_figure.py`, the LTI runners and the test suite, all inside this repository.
 
 The numerics are dimension-agnostic; the dimension comes from the point being projected. The visualisation layer is 2-D only and always will be, because its job is to show geometry a reader can see. Do not try to generalise the visualisers; add a different output instead.
 
@@ -29,6 +29,8 @@ gradient.py ────> convex_projection_solver.py <──── projection_r
                      main.py, paper_figure.py
 ```
 
+The LTI solvers sit beside the core solvers, not inside them: `lti_solver.py` subclasses `ConvexProjectionSolver` and draws its numerics from `lti_numerics.py`, which knows nothing of solver state; `oracle.py` draws on `lti_numerics.py` but not on `lti_solver.py`; the `run_*.py` runners, through the shared example in `lti_examples.py`, are the LTI entry points.
+
 `convex_projection_solver.py` owns the algorithms and knows nothing about plotting. `projection_result.py` is a dataclass and knows nothing at all. `visualiser.py` reads a `ProjectionResult` and the constraint arrays; it never calls a solver. `gradient.py` wraps `quadprog` and is the only place that library is named. `edge_rounder.py` produces constraint arrays and is optional: nothing else imports it at module scope.
 
 Imports are flat, by module name, resolved through `sys.path`. There is no package and no `__init__.py`. That has not been changed because every entry point either runs inside `Python/Working Version/` or inserts that directory itself, and introducing a package would break the recorded invocations in the report and in the README.
@@ -50,6 +52,16 @@ Three concrete solvers:
 The extension contract for a fourth variant: subclass `ConvexProjectionSolver`, override `_update_error`, `solve` and `_format_output`, and preserve the invariant every variant shares, that one cycle projects onto every constraint exactly once in the order the rows of `A` are given. Shared geometry goes on the base class, not into the subclass.
 
 `dykstra_projection()` at the bottom of the module is a backwards-compatibility wrapper returning the old five-tuple. New code calls the solver classes.
+
+### The LTI solvers
+
+`LTISolver` in `lti_solver.py` accelerates Dykstra's algorithm by treating it, between changes of the active set, as a linear time-invariant system, the reformulation and accelerated algorithm of the SIAM paper, whose sources live outside this repository. It is one class with five presets, `cycle_map`, `closed_form`, `envelope`, `frozen_stall` and `deflated_modal`, each adding one technique to the one before so that the techniques can be compared; `LTIVer1Solver` to `LTIVer5Solver` default to one preset each and keep the names the runners and experiments use.
+
+`solve()` runs one exact Dykstra cycle, builds the cycle map of the active set it found, and then runs episodes. An episode is a run of cycles with a constant active set; it ends in one of three outcomes, a switch at a given cycle, the budget running out, or a settlement, and a switch is realised by one exact Dykstra cycle before the next episode starts. Within an episode the presets differ in how they get from one cycle to a later one: stepping through the cycle map, evaluating the closed form around its fixed point, jumping a run an envelope bound certifies switch-free, fast-forwarding a frozen stall, or scanning the deflated modal form of a singular episode. They also differ in how they settle: `cycle_map` never does, `closed_form` to `frozen_stall` settle on the fixed point once the active set is proven final, and `deflated_modal` alone tries the KKT certificate, at every episode's entry and wherever its active set is proven final, and settles only on a point that passes it.
+
+The state is the point and one scalar auxiliary per half-space, since Dykstra's correction for a half-space is always a multiple of its unit normal. Exact cycles write their own history rows in `_exact_cycle`. A cycle the solver skipped is replayed from the previous row by `_record_cycle`, which is exact within an episode because an active half-space projects onto its boundary and an inactive one leaves the point alone. After a settlement `_record_limit` fills every remaining row with the limit.
+
+`lti_numerics.py` holds the pieces that need no solver state: the exact cycle, the cycle map and the prediction of the next active set from it, the closed forms, the finality test, the envelope horizon, the frozen-stall crossing, nonnegative least squares, and the KKT certificate.
 
 ## 5. The result object
 
