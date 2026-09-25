@@ -168,6 +168,31 @@ class LTISolverRegressionTests(unittest.TestCase):
                 np.testing.assert_allclose(result.projection, expected_result(result, solver, dykstra),
                                            rtol=0.0, atol=1e-9 if result.is_settled() else 1e-12)
 
+    def test_nearly_parallel_rank_deficient_episode_stays_on_the_dykstra_path(self) -> None:
+        # Rows 1 and 2 are about 6.5e-6 rad apart, so I - A_m + P_1 has condition about
+        # 7e10 in the first deflated episode, which switches on its first cycle, where
+        # rebuilding the state from the modes left the path by 7e-11
+        A = np.array([
+            [1.061165117248386, -0.4797851068903314, 1.4493092864891945, -0.644978051185903],
+            [0.2640002985508877, 0.2966456083995408, 0.19636328836145112, -0.6327615294046715],
+            [0.26400116371678334, 0.296648512460822, 0.19635930251866132, -0.6327611382963289],
+        ])
+        b = np.array([1.5782483174150457, -0.49228872262211826, -0.49229626709978036])
+        z = np.array([0.1, -1.0, 2.0, -0.8])
+
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=2).solve().projection
+        for solver_type in LTI_SOLVERS:
+            with self.subTest(solver=solver_type.__name__, max_iter=2):
+                solver = solver_type(z, A, b, max_iter=2)
+                result = solver.solve()
+                np.testing.assert_allclose(result.projection, expected_result(result, solver, dykstra),
+                                           rtol=0.0, atol=1e-12)
+
+            with self.subTest(solver=solver_type.__name__, max_iter=2000):
+                solver = solver_type(z, A, b, max_iter=2000)
+                result = solver.solve()
+                np.testing.assert_allclose(result.projection, solver.actual_projection, rtol=0.0, atol=1e-12)
+
     def test_closed_form_stays_on_the_dykstra_path_when_the_resolvent_is_ill_conditioned(self) -> None:
         # Two normals 1e-5 rad apart give cond(I - A_m) of about 2.3e10, below the cutoff
         # of the closed form; an explicit inverse loses about cond * eps there
@@ -237,6 +262,32 @@ class LTISolverRegressionTests(unittest.TestCase):
                     self.assertEqual(metadata["certificate"], result.certificate)
                 else:
                     self.assertNotIn("settled_at", metadata)
+
+    def test_deflated_episode_switching_on_its_first_cycle_keeps_the_dykstra_state(self) -> None:
+        # Rows 1-3 span three of the four coordinates, so their episode is deflated,
+        # and their cycle map is nearly defective (eigenvector condition about 6e7).
+        # Row 0 reactivates on the episode's first cycle; rebuilding the state from
+        # the modes there would move it off Dykstra's path by about cond * eps
+        z = np.array([4.0, -6.0, -1.0, 1.0])
+        A = np.array([
+            [-1.0, 0.4, 0.1, 0.0],
+            [0.18881711923692265, -0.19839032737660414, 0.9617636786063786, 0.0],
+            [0.16021416297716448, -0.818128926665578, 0.5522648652001644, 0.0],
+            [0.6640385974516226, 0.5503881193550134, -0.5060885882603295, 0.0],
+            [0.5, -0.8, 0.0, 0.2],
+        ])
+        b = np.array([-4.4, 0.0, 0.0, 0.0, 8.0])
+        max_iter = 2
+
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=max_iter, track_error=True,
+                                          plot_errors=True).solve()
+        result = LTIVer5Solver(z, A, b, max_iter=max_iter, track_error=True, plot_errors=True).solve()
+        end = max_iter + 1 if result.settled_at is None else result.settled_at
+        self.assertGreater(end, 2)
+        atol = 1e-10 * np.abs(z).max()
+        np.testing.assert_allclose(result.path[:end], dykstra.path[:end], rtol=0.0, atol=atol)
+        np.testing.assert_allclose(result.errors_for_plotting[:end - 1],
+                                   dykstra.errors_for_plotting[:end - 1], rtol=0.0, atol=atol)
 
     def test_closed_form_fixed_point_is_solved_rather_than_inverted(self) -> None:
         # Rows 0 and 1 are 1.5e-4 rad apart, so cond(I - A_m) is about 5.8e7, inside
