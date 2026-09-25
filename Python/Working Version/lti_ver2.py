@@ -77,8 +77,7 @@ class LTIVer2Solver(LTIVer1Solver):
         # then agrees with the result even when it is the last cycle
         self._set_state(cf.x_inf, cf.G + t * cf.beta, cf.active)
         self.settled_at, self.certificate = cycle, "finality"
-        for later_cycle in range(cycle, self.max_iter + 1):
-            self._record_cycle(later_cycle, cf.active)
+        self._record_limit(cycle, cf.active)
 
     def _closed_form_episode(self, start_cycle: int, IA: np.ndarray) -> int | None:
         """Scan an episode to its switch."""
@@ -149,11 +148,24 @@ class LTIVer2Solver(LTIVer1Solver):
 
     def _record_cycle(self, cycle: int, active: tuple | np.ndarray, record_path: bool = True) -> None:
         """Record one cycle."""
+        # An exact cycle has written its own path; any other is replayed
         if record_path:
-            self.x_historical[cycle][:, :] = self.x
-        self._track_error(cycle)
+            self._replay_cycle(cycle, active)
+        else:
+            self._track_error(cycle)
         if self.plot_active_halfspaces:
             self._record_activity(cycle, tuple(active))
+
+    def _record_limit(self, first_cycle: int, active: tuple | np.ndarray) -> None:
+        """Record the limit for every remaining cycle."""
+        self.x_historical[first_cycle:] = self.x
+        if self.plot_errors:
+            self.errors_for_plotting[first_cycle - 1:] = self.y[:, None] * self.unit_A
+        for cycle in range(first_cycle, self.max_iter + 1):
+            self._track_error(cycle)
+        if self.plot_active_halfspaces:
+            self.active_half_spaces[:, first_cycle:] = np.asarray(active, dtype=float)[:, None]
+        self._recorded_y = self.y.copy()
 
     def solve(self) -> ProjectionResult:
         """Project the point."""
