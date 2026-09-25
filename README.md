@@ -101,6 +101,8 @@ traces. `VerticalVisualiser` combines the activity traces on one lower axis.
 - `frozen_stall` (`LTIVer4Solver`) also fast-forwards frozen stalls, in which only the auxiliaries move.
 - `deflated_modal` (`LTIVer5Solver`) also scans singular episodes in their deflated modal form, and settles only on a point that passes the KKT test.
 
+Every preset returns Dykstra's own iterate after `max_iter` cycles unless it settles first, and records the same path, errors and corrections as `DykstraProjectionSolver` up to that point. A settled result holds the limit from `result.settled_at` on, and `result.certificate` says how it was proven: `"kkt"` means the point passed the KKT conditions and is the projection, to within `1e-9` of the distance moved beyond the rounding of the data, which nearly dependent active normals amplify; `"finality"` means the active set was proven final, with drifts below rounding taken as zero, and the point is the fixed point of the last cycle map. `result.is_settled()` tells a settled limit from the last iterate.
+
 `lti_numerics.py` holds the numerical pieces free of solver state. `oracle.py` uses them too: it records one Dykstra run's activity schedule and replays it with every change known in advance, for comparison.
 
 Run any preset from the working-code directory; each has a matching runner, for example:
