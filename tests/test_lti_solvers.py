@@ -168,6 +168,27 @@ class LTISolverRegressionTests(unittest.TestCase):
                 np.testing.assert_allclose(result.projection, expected_result(result, solver, dykstra),
                                            rtol=0.0, atol=1e-9 if result.is_settled() else 1e-12)
 
+    def test_closed_form_stays_on_the_dykstra_path_when_the_resolvent_is_ill_conditioned(self) -> None:
+        # Two normals 1e-5 rad apart give cond(I - A_m) of about 2.3e10, below the cutoff
+        # of the closed form; an explicit inverse loses about cond * eps there
+        theta = 1e-5
+        z = np.array([3.0, 2.0, 0.0])
+        A = np.array([[1.0, 0.0, 0.0], [np.cos(theta), np.sin(theta), 0.0], [1.0, 1.0, -1.0]])
+        b = np.array([1.0, 1.0, -1.0])
+
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=2).solve().projection
+        for solver_type in LTI_SOLVERS:
+            with self.subTest(solver=solver_type.__name__, max_iter=2):
+                solver = solver_type(z, A, b, max_iter=2)
+                result = solver.solve()
+                np.testing.assert_allclose(result.projection, expected_result(result, solver, dykstra),
+                                           rtol=0.0, atol=1e-10)
+
+            with self.subTest(solver=solver_type.__name__, max_iter=2000):
+                solver = solver_type(z, A, b, max_iter=2000)
+                result = solver.solve()
+                np.testing.assert_allclose(result.projection, solver.actual_projection, rtol=0.0, atol=1e-10)
+
     def test_settlement_is_reported_and_recorded_from_its_cycle(self) -> None:
         # Dykstra reaches (-0.25, 0.25) in two cycles and the projection (0, 0) only in
         # the limit; Ver2-4 prove the active set final on cycle 2
@@ -216,6 +237,45 @@ class LTISolverRegressionTests(unittest.TestCase):
                     self.assertEqual(metadata["certificate"], result.certificate)
                 else:
                     self.assertNotIn("settled_at", metadata)
+
+    def test_closed_form_fixed_point_is_solved_rather_than_inverted(self) -> None:
+        # Rows 0 and 1 are 1.5e-4 rad apart, so cond(I - A_m) is about 5.8e7, inside
+        # the closed form; its first cycle x_2 = A_m x_1 + (I - A_m) x_inf returns
+        # A_m x_1 + B_m only if x_inf solves the system, and an explicit inverse leaves
+        # a residual of about cond * eps that shows in the returned iterate
+        z = np.array([4.9807, -2.0211, 4.3121])
+        A = np.array([[1.8014, -2.1326, 0.6021],
+                      [1.2614, -1.4932, 0.4213],
+                      [0.683, 0.4823, 0.8875],
+                      [-0.8541, 0.223, -0.7151],
+                      [1.2629, 0.8911, 1.6405]])
+        b = np.array([6.8518, 4.7968, 2.3995, -0.6644, 4.4364])
+        for max_iter in (3, 20):
+            dykstra = DykstraProjectionSolver(z, A, b, max_iter=max_iter).solve().projection
+            for solver_type in LTI_SOLVERS:
+                with self.subTest(solver=solver_type.__name__, max_iter=max_iter):
+                    solver = solver_type(z, A, b, max_iter=max_iter)
+                    result = solver.solve()
+                    np.testing.assert_allclose(result.projection, expected_result(result, solver, dykstra),
+                                               rtol=0.0, atol=1e-12)
+                    if not result.is_settled():
+                        np.testing.assert_allclose(result.projection, result.path[-1, -1],
+                                                   rtol=0.0, atol=1e-12)
+
+    def test_oracle_jump_matches_dykstra_when_the_resolvent_is_ill_conditioned(self) -> None:
+        # Normals about 1e-4 rad apart give cond(I - A_m) of about 7e7, below the cutoff
+        # of the closed form; an explicit inverse loses about 1e-7 in a single jumped cycle
+        z = np.array([71.0, -21.5])
+        A = np.array([[0.75, -1.5], [0.75016, -1.49988]])
+        b = A @ np.array([65.0, -24.0])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=2).solve().projection
+
+        schedule, recorded = record_schedule(z, A, b, max_iter=2)
+        replayed = oracle_lti_projection(z, A, b, schedule)
+
+        self.assertEqual([cycles for _, cycles in schedule], [2])
+        np.testing.assert_array_equal(recorded.projection, dykstra)
+        np.testing.assert_allclose(replayed.projection, dykstra, rtol=0.0, atol=1e-12 * np.abs(z).max())
 
 
 if __name__ == "__main__":
