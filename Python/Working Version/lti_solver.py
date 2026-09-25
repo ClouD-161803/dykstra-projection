@@ -173,7 +173,7 @@ class LTISolver(ConvexProjectionSolver):
         active = np.array(self.cmap.active)
         y = np.where(active, y, 0.0)
         delta = self.cmap.R @ x + self.cmap.s
-        delta_floor = rounding_floor(np.abs(self.cmap.R) @ np.abs(x) + self.cmap.s_scale)
+        delta_floor = rounding_floor(self.cmap.R_scale @ np.abs(x) + self.cmap.s_scale)
 
         # Jump to the cycle before the crossing, or through the rest of the budget when
         # the crossing lies beyond it, applying the k increments at once while the
@@ -200,7 +200,7 @@ class LTISolver(ConvexProjectionSolver):
             y_t = active_auxiliaries(cf, t, z_t)
 
             # Stop just before the cycle on which the active set changes
-            if not np.array_equal(closed_form_activity(cf, self.cmap.R, y_t, z_prev), cf.active):
+            if not np.array_equal(closed_form_activity(cf, self.cmap, y_t, z_prev), cf.active):
                 self._set_state(cf.x_inf + z_prev, active_auxiliaries(cf, t - 1, z_prev))
                 return _switch(cycle)
 
@@ -225,7 +225,7 @@ class LTISolver(ConvexProjectionSolver):
             z_before = np.linalg.matrix_power(cf.A_m, k - 1) @ z_t
             z_after = cf.A_m @ z_before
             y_after = active_auxiliaries(cf, t + k, z_after)
-            if np.array_equal(closed_form_activity(cf, self.cmap.R, y_after, z_before), cf.active):
+            if np.array_equal(closed_form_activity(cf, self.cmap, y_after, z_before), cf.active):
                 self._set_state(cf.x_inf + z_after, y_after)
                 for later_cycle in range(cycle + 1, cycle + k + 1):
                     self._record_cycle(later_cycle)
@@ -260,7 +260,7 @@ class LTISolver(ConvexProjectionSolver):
             return cf.x_inf + (Q @ (V @ (lam_t * coords))).real, cf.G + t * cf.beta - (mu @ lam_t).real
 
         # An inactive half-space reactivates only on a slack above rounding
-        g_floor = cf.beta_floor + rounding_floor(env_g.sum(axis=1))
+        g_floor = cf.beta_floor + rounding_floor(self.cmap.R_scale @ np.abs(Q) @ (np.abs(V) @ np.abs(coords)))
 
         # Scan in blocks; a half-space cleared by its envelope leaves the watch set
         watch = np.ones(self.n, dtype=bool)

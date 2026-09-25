@@ -25,10 +25,10 @@ _KKT_CANDIDATE_TOL = 1e-7
 _KKT_ACCURACY = 1e-9
 
 # The cycle map of an episode: A_m and B_m carry a cycle's start to its end, row m of
-# R and s gives the increment R_m x + s_m of auxiliary m over a cycle from x, s_scale
-# holds the magnitudes s is computed from, and span is an orthonormal basis of the
-# active normals, the only directions a cycle moves
-CycleMap = namedtuple("CycleMap", "active A_m B_m R s s_scale span")
+# R and s gives the increment R_m x + s_m of auxiliary m over a cycle from x, R_scale
+# and s_scale hold the magnitudes R and s are computed from, and span is an
+# orthonormal basis of the active normals, the only directions a cycle moves
+CycleMap = namedtuple("CycleMap", "active A_m B_m R R_scale s s_scale span")
 
 # Constants of one episode's closed form: its fixed point x_inf, RIA = R (I - A_m)^-1,
 # the levels G and drifts beta of the auxiliaries (floors Gamma on inactive rows), the
@@ -72,13 +72,17 @@ def cycle_map(unit_A: np.ndarray, unit_b: np.ndarray, active: tuple) -> CycleMap
     P = np.eye(p)
     q = np.zeros(p)
     R = np.zeros((n, p))
+    R_scale = np.zeros((n, p))
     s = np.zeros(n)
     s_scale = np.zeros(n)
     for m in range(n):
         normal, offset = unit_A[m], unit_b[m]
 
-        # Row m of the auxiliary update y_m += a_m . x_{m-1} - b_m
+        # Row m of the auxiliary update y_m += a_m . x_{m-1} - b_m; for a half-space
+        # that repeats the last active one before it R_m cancels to rounding, so floors
+        # use R_scale
         R[m] = P.T @ normal
+        R_scale[m] = np.abs(P).T @ np.abs(normal)
         s[m] = float(normal @ q) - offset
         s_scale[m] = float(np.abs(normal) @ np.abs(q)) + abs(offset)
 
@@ -93,7 +97,8 @@ def cycle_map(unit_A: np.ndarray, unit_b: np.ndarray, active: tuple) -> CycleMap
     if rows.size:
         U, sigma, _ = np.linalg.svd(unit_A[rows].T, full_matrices=False)
         span = U[:, sigma > 1e-12 * sigma[0]]
-    return CycleMap(active=tuple(active), A_m=P, B_m=q, R=R, s=s, s_scale=s_scale, span=span)
+    return CycleMap(active=tuple(active), A_m=P, B_m=q, R=R, R_scale=R_scale, s=s, s_scale=s_scale,
+                    span=span)
 
 
 def advance(cmap: CycleMap, x: np.ndarray) -> np.ndarray:
@@ -112,7 +117,7 @@ def predicted_activity(cmap: CycleMap, x: np.ndarray, y: np.ndarray) -> tuple:
     # auxiliary
     delta = cmap.R @ x + cmap.s
     y_next = y + delta
-    floor = rounding_floor(np.abs(y) + np.abs(cmap.R) @ np.abs(x) + cmap.s_scale)
+    floor = rounding_floor(np.abs(y) + cmap.R_scale @ np.abs(x) + cmap.s_scale)
     active = np.array(cmap.active)
     active_next = np.where(active, y_next > -floor, delta > floor)
     return tuple(active_next), np.where(active_next, np.maximum(y_next, 0.0), 0.0)
@@ -134,7 +139,7 @@ def _closed_form(cmap: CycleMap, x: np.ndarray, y: np.ndarray, x_inf: np.ndarray
     active = np.array(cmap.active)
     beta = cmap.R @ x_inf + cmap.s
     return ClosedForm(A_m=cmap.A_m, x_inf=x_inf, RIA=RIA, G=y + RIA @ (x - x_inf), beta=beta,
-                      beta_floor=rounding_floor(np.abs(cmap.R) @ np.abs(x_inf) + cmap.s_scale),
+                      beta_floor=rounding_floor(cmap.R_scale @ np.abs(x_inf) + cmap.s_scale),
                       row_RIA=np.linalg.norm(RIA, axis=1), row_R=np.linalg.norm(cmap.R, axis=1),
                       active=active, inactive=~active)
 
@@ -168,12 +173,12 @@ def active_auxiliaries(cf: ClosedForm, t: int, z_t: np.ndarray) -> np.ndarray:
     return cf.G + t * cf.beta - cf.RIA @ z_t
 
 
-def closed_form_activity(cf: ClosedForm, R: np.ndarray, y_t: np.ndarray, z_prev: np.ndarray) -> np.ndarray:
+def closed_form_activity(cf: ClosedForm, cmap: CycleMap, y_t: np.ndarray, z_prev: np.ndarray) -> np.ndarray:
     """Signs of a cycle's auxiliaries and slacks."""
     # Slack g_j = beta_j + R_j z_{t-1}; an inactive half-space reactivates only on a
     # slack above rounding
-    g_t = cf.beta + R @ z_prev
-    floor = cf.beta_floor + rounding_floor(np.abs(R) @ np.abs(z_prev))
+    g_t = cf.beta + cmap.R @ z_prev
+    floor = cf.beta_floor + rounding_floor(cmap.R_scale @ np.abs(z_prev))
     return np.where(cf.active, y_t > 0.0, g_t > floor)
 
 
