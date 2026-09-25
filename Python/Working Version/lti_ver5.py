@@ -169,10 +169,13 @@ class LTIVer5Solver(LTIVer4Solver):
             flips = ((vals > 0.0) != active[None, :]) & watch[None, :]
             flip_rows = np.where(flips.any(axis=1))[0]
 
-            # Stop just before the first cycle whose signs differ from the active set
+            # Stop just before the first cycle whose signs differ from the active set;
+            # the state at cycle t is already committed, and rebuilding it from the
+            # modes would move it by about eps times the condition of V
             if flip_rows.size:
                 t_switch = t + 1 + int(flip_rows[0])
-                self._commit_modal_state(cf, Q, V, lam, coords, mu, t_switch - 1)
+                if t_switch - 1 > t:
+                    self._commit_modal_state(cf, Q, V, lam, coords, mu, t_switch - 1)
                 for cycle in range(start_cycle + t, start_cycle + t_switch - 1):
                     self._record_cycle(cycle, active)
                 return start_cycle + t_switch - 1
