@@ -424,6 +424,19 @@ class LTISolverRegressionTests(unittest.TestCase):
                         np.testing.assert_allclose(result.projection, solver.actual_projection,
                                                    rtol=0.0, atol=1e-8 * np.abs(z).max())
 
+    def test_stall_jump_does_not_skip_a_small_reactivation(self) -> None:
+        # Rows 1 and 3 hold the state at x = 0.5 * scale while row 1 drains; row 0 is
+        # violated there by only 5e-13, and Dykstra reactivates it on cycle 2
+        scale = 1e-6
+        z = scale * np.array([5.0, 0.0])
+        A = np.array([[-1.0, 1.0], [1.0, 0.0], [-1.0, 0.0], [1.0, 0.0]])
+        b = np.array([-0.5 * scale - 5e-13, scale, 0.0, 0.5 * scale])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=9).solve().projection
+        result = LTIVer4Solver(z, A, b, max_iter=9, plot_active_halfspaces=True).solve()
+        self.assertFalse(result.is_settled())
+        np.testing.assert_array_equal(result.active_half_spaces[:, 2], [1, 1, 0, 1])
+        np.testing.assert_allclose(result.projection / scale, dykstra / scale, rtol=0.0, atol=1e-12)
+
     def test_deflated_episode_switching_on_its_first_cycle_keeps_the_dykstra_state(self) -> None:
         # Rows 1-3 span three of the four coordinates, so their episode is deflated,
         # and their cycle map is nearly defective (eigenvector condition about 6e7).
