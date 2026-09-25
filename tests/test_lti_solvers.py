@@ -348,6 +348,32 @@ class LTISolverRegressionTests(unittest.TestCase):
                 result = solver.solve()
                 np.testing.assert_allclose(result.projection, solver.actual_projection, rtol=0.0, atol=1e-10)
 
+    def test_correction_history_satisfies_the_dykstra_identity(self) -> None:
+        # Dykstra's auxiliary update telescopes to x^t = z - sum_m e_m^t after every cycle
+        z, A, b = box_line_problem()
+        max_iter = 40
+        atol = 1e-9 * (1.0 + np.abs(z).max())
+        reference = DykstraProjectionSolver(z, A, b, max_iter=max_iter, plot_errors=True).solve()
+        np.testing.assert_allclose(reference.path[1:, -1] + reference.errors_for_plotting.sum(axis=1),
+                                   np.tile(z, (max_iter, 1)), atol=atol)
+
+        for solver_type in LTI_SOLVERS:
+            with self.subTest(solver=solver_type.__name__):
+                result = solver_type(z, A, b, max_iter=max_iter, plot_errors=True).solve()
+                corrections = result.errors_for_plotting
+                np.testing.assert_allclose(result.path[1:, -1] + corrections.sum(axis=1),
+                                           np.tile(z, (max_iter, 1)), atol=atol)
+                np.testing.assert_allclose(result.projection + corrections[-1].sum(axis=0), z, atol=atol)
+
+    def test_converged_correction_history_matches_standard_dykstra(self) -> None:
+        # One half-space: Dykstra is exact after one cycle, so every correction is known
+        z, A, b = np.array([2.0, 1.0]), np.array([[1.0, 0.0]]), np.array([0.0])
+        reference = DykstraProjectionSolver(z, A, b, max_iter=3, plot_errors=True).solve()
+        for solver_type in LTI_SOLVERS:
+            with self.subTest(solver=solver_type.__name__):
+                result = solver_type(z, A, b, max_iter=3, plot_errors=True).solve()
+                np.testing.assert_allclose(result.errors_for_plotting, reference.errors_for_plotting, atol=1e-12)
+
     def test_every_cycle_is_recorded_without_constraints(self) -> None:
         z = np.array([1.0, 2.0])
         A, b = np.empty((0, 2)), np.empty(0)
@@ -362,6 +388,48 @@ class LTISolverRegressionTests(unittest.TestCase):
                     np.testing.assert_array_equal(result.squared_errors, reference.squared_errors)
                     np.testing.assert_array_equal(result.converged_errors, reference.converged_errors)
                     np.testing.assert_array_equal(result.stalled_errors, reference.stalled_errors)
+
+    def test_history_matches_standard_dykstra_until_settlement(self) -> None:
+        # Each case skips cycles a different way: closed-form scanning, an envelope jump
+        # (Ver3), a frozen-stall jump (Ver4) and the modal scan (Ver5); a skipped cycle
+        # must still be recorded as Dykstra's own iterate, half-space by half-space
+        box_z, box_A, box_b = box_line_problem()
+        cases = {
+            "closed form": (box_z, box_A, box_b),
+            "envelope jump": (
+                [1.5, -4.5],
+                [[-0.5, -0.75], [0.25, -2.5], [3.0, -0.75], [-0.75, 0.75]],
+                [1.5, 6.5, 3.0, 0.25],
+            ),
+            "frozen stall": (
+                [0.5, 0.0, 6.0],
+                [[-1.0, 0.0, 0.75], [-1.0, 0.0, 0.75], [1.25, -0.25, -1.75]],
+                [2.125, 1.875, -0.625],
+            ),
+            "modal scan": (
+                [1.0, 2.5, 5.5],
+                [[-1.0, -0.25, 1.5], [-0.25, -0.25, 0.5], [0.5, -0.25, 1.0],
+                 [0.75, 0.25, -0.25], [-1.5, 0.5, -0.5], [0.25, -0.25, 1.75]],
+                [-2.0, 0.5, 0.25, 3.75, -1.5, 0.0],
+            ),
+        }
+
+        max_iter = 60
+        for case_name, problem in cases.items():
+            z, A, b = (np.asarray(item, dtype=float) for item in problem)
+            atol = 1e-10 * np.abs(z).max()
+            dykstra = DykstraProjectionSolver(z, A, b, max_iter=max_iter, track_error=True,
+                                              plot_errors=True).solve()
+            for solver_type in LTI_SOLVERS:
+                with self.subTest(case=case_name, solver=solver_type.__name__):
+                    result = solver_type(z, A, b, max_iter=max_iter, track_error=True,
+                                         plot_errors=True).solve()
+                    end = result.settled_at if result.is_settled() else max_iter + 1
+                    np.testing.assert_allclose(result.path[:end], dykstra.path[:end], rtol=0.0, atol=atol)
+                    np.testing.assert_allclose(result.squared_errors[:end], dykstra.squared_errors[:end],
+                                               rtol=0.0, atol=1e-9)
+                    np.testing.assert_allclose(result.errors_for_plotting[:end - 1],
+                                               dykstra.errors_for_plotting[:end - 1], rtol=0.0, atol=atol)
 
     def test_settlement_is_reported_and_recorded_from_its_cycle(self) -> None:
         # Dykstra reaches (-0.25, 0.25) in two cycles and the projection (0, 0) only in
