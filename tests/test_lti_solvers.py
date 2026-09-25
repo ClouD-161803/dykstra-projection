@@ -365,6 +365,22 @@ class LTISolverRegressionTests(unittest.TestCase):
                 else:
                     self.assertNotIn("settled_at", metadata)
 
+    def test_ill_conditioned_episode_returns_the_iterate_or_the_projection(self) -> None:
+        # A wedge 1.5e-6 rad wide gives cond(I - A_m) of about 4e11, where the fixed point
+        # of the rounded cycle map misses the apex by about 3e-6
+        theta = 1.5e-6
+        A = np.array([[0.0, 1.0], [np.sin(theta), -np.cos(theta)]])
+        apex = np.array([0.3, 0.7])
+        z, b = apex + np.array([1.0, 0.5]), A @ apex
+        for max_iter in (5, 200):
+            reference_solver = DykstraProjectionSolver(z, A, b, max_iter=max_iter)
+            dykstra = reference_solver.solve().projection
+            for solver_type in LTI_SOLVERS:
+                with self.subTest(solver=solver_type.__name__, max_iter=max_iter):
+                    projection = solver_type(z, A, b, max_iter=max_iter).solve().projection
+                    self.assertLess(min(np.abs(projection - dykstra).max(),
+                                        np.abs(projection - reference_solver.actual_projection).max()), 1e-8)
+
     def test_ver5_certifies_only_the_projection(self) -> None:
         # Each case once returned settled=True away from the projection: a slab whose
         # walls are 9e-8 rad from parallel and whose limit violates a row by 1.7e-9, rows
