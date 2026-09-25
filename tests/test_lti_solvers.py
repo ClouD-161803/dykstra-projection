@@ -560,6 +560,25 @@ class LTISolverRegressionTests(unittest.TestCase):
                                            rtol=0.0, atol=1e-12 * np.abs(z).max())
                 self.assertLess(len(steps), 100)
 
+    def test_stepped_singular_episode_does_not_drift_along_the_kernel(self) -> None:
+        # Four active half-spaces in R^6 leave I - A_m singular, so the final episode is
+        # stepped through the rounded cycle map, whose kernel error nothing damps.
+        # Whether a given problem drifts depends on its rounding, so this fixture is
+        # tied to the numerical stack
+        rng = np.random.default_rng(1001)
+        p = int(rng.integers(3, 7))
+        r = int(rng.integers(1, p))
+        A_active = rng.standard_normal((r, p))
+        x_star = rng.standard_normal(p) * 3
+        A_loose = rng.standard_normal((3, p))
+        z = x_star + A_active.T @ rng.uniform(1, 3, r)
+        A = np.vstack([A_active, A_loose])
+        b = np.hstack([A_active @ x_star, A_loose @ x_star + rng.uniform(1, 2, 3)])
+        for solver_type in (LTIVer1Solver, LTIVer2Solver, LTIVer3Solver, LTIVer4Solver):
+            with self.subTest(solver=solver_type.__name__):
+                result = solver_type(z, A, b, max_iter=20000).solve()
+                np.testing.assert_allclose(result.projection, x_star, rtol=0.0, atol=1e-13)
+
     def test_ill_conditioned_episode_returns_the_iterate_or_the_projection(self) -> None:
         # A wedge 1.5e-6 rad wide gives cond(I - A_m) of about 4e11, where the fixed point
         # of the rounded cycle map misses the apex by about 3e-6
