@@ -962,6 +962,89 @@ class LTISolverRegressionTests(unittest.TestCase):
                 np.testing.assert_allclose(result.path[:2], dykstra.path[:2], rtol=0.0, atol=1e-15)
                 np.testing.assert_allclose(result.path[2:, -1], 0.0, rtol=0.0, atol=1e-15)
 
+    def test_idle_member_below_zero_does_not_block_an_envelope_jump(self) -> None:
+        # Rows 0 and 1 are one equality whose idle member's level sits a rounding below
+        # zero while another row drains; an envelope that gave that level no rounding
+        # allowance, unlike the activity and finality tests, blocked every jump
+        z = np.array([-3.208224079992573, -4.869014094511927])
+        A = np.array([[-0.9991100797805105, 0.04217876813020846],
+                      [0.9991100797805105, -0.04217876813020846],
+                      [-0.5417338080204637, -0.9780206957154063],
+                      [-0.04217876813020838, -0.9991100797805105]])
+        b = np.array([0.0, 0.0, 0.9977649244935269, 1.0])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=1000).solve().projection
+        for solver_type in (LTIVer3Solver, LTIVer4Solver):
+            with self.subTest(solver=solver_type.__name__):
+                solver = solver_type(z, A, b, max_iter=1000)
+                jumps = []
+                jump = solver._jump
+                solver._jump = lambda *args: (lambda result: (jumps.append(result[0]), result)[1])(jump(*args))
+                result = solver.solve()
+                np.testing.assert_allclose(result.projection, expected_result(result, solver, dykstra),
+                                           rtol=0.0, atol=1e-12)
+                self.assertGreater(max(jumps, default=0), 100)
+
+    def test_settlement_does_not_depend_on_the_orientation_of_the_problem(self) -> None:
+        # Every active drift is zero up to rounding; a rotation turns some of them from
+        # +1e-16 to -4e-16, which the jump once read as a drain and so never settled
+        z = np.array([-5.497707460834967, -1.6925215326531708, 3.77489315660018, -0.19623879257465043])
+        A = np.array([[-0.6932951771195306, -0.19792560108104107, -0.547790628447431, 1.1381627274228252],
+                      [-0.6932602883354098, -0.1979426640043639, -0.5478949878416994, 1.1381439026810296],
+                      [-0.9834762156328521, -0.6511381152978796, -1.569541675179298, -0.8994725705359745],
+                      [1.2703567871744328, -1.128976285898002, 0.8484861001797458, -0.8043710321036117],
+                      [-0.12681975508350787, 1.1979779787982174, 0.6359494177955881, -0.24588020544832992]])
+        b = np.array([0.7243482031755055, 0.8687590246482085, 3.220428682196247, -0.8097083228834517,
+                      -0.5854952991160923])
+        Q = np.array([[-0.7185372612657697, -0.4019783094795587, -0.3102619699497809, 0.4752422044426656],
+                      [0.21012706394174518, -0.8664378953933072, 0.43313149182980465, -0.1323975121024793],
+                      [0.604839691895601, -0.24870205025907688, -0.7192314227244058, 0.23456853555068516],
+                      [0.2715138454656467, 0.16076723027813958, 0.445915666190364, 0.8376116928715575]])
+        for solver_type in (LTIVer2Solver, LTIVer3Solver, LTIVer4Solver):
+            with self.subTest(solver=solver_type.__name__):
+                original = solver_type(z, A, b, max_iter=200).solve()
+                rotated = solver_type(Q @ z, A @ Q.T, b, max_iter=200).solve()
+                self.assertEqual(original.certificate, "finality")
+                self.assertEqual(rotated.certificate, "finality")
+                np.testing.assert_allclose(Q.T @ rotated.projection, original.projection, rtol=0.0, atol=1e-12)
+
+    def test_rising_auxiliary_does_not_block_an_envelope_jump(self) -> None:
+        # In the episode with all three rows active, row 2's auxiliary has a negative
+        # level G and rises by about 0.013 per cycle while row 1 drains; reading every
+        # drift that is not a drain as zero would leave row 2's envelope below zero, and
+        # no cycle would be jumped
+        z = np.array([5.0, -2.0])
+        A = np.array([[-0.5, -2.0], [1.5, 0.5], [1.5, 1.5]])
+        b = np.array([1.5, -0.5, -1.25])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=400).solve().projection
+        for solver_type in (LTIVer3Solver, LTIVer4Solver):
+            with self.subTest(solver=solver_type.__name__):
+                solver = solver_type(z, A, b, max_iter=400)
+                jumps = []
+                jump = solver._jump
+                solver._jump = lambda *args: (lambda result: (jumps.append(result[0]), result)[1])(jump(*args))
+                result = solver.solve()
+                self.assertFalse(result.is_settled())
+                np.testing.assert_allclose(result.projection, dykstra, rtol=0.0, atol=1e-12)
+                self.assertGreater(max(jumps, default=0), 100)
+
+    def test_slack_through_the_fixed_point_does_not_block_an_envelope_jump(self) -> None:
+        # In the episode with rows 0 to 2 active, row 3's boundary passes through the
+        # fixed point, so its slack there is +7e-17, zero up to rounding; a slack test
+        # without that rounding read it as a reactivation and blocked every jump
+        z = np.array([5.0, -2.0])
+        A = np.array([[-0.5, -2.0], [1.5, 0.5], [1.5, 1.5], [0.5, 0.8660254037844386]])
+        b = np.array([1.5, -0.5, -1.25, -0.6844752537689476])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=400).solve().projection
+        for solver_type in (LTIVer3Solver, LTIVer4Solver):
+            with self.subTest(solver=solver_type.__name__):
+                solver = solver_type(z, A, b, max_iter=400)
+                jumps = []
+                jump = solver._jump
+                solver._jump = lambda *args: (lambda result: (jumps.append(result[0]), result)[1])(jump(*args))
+                result = solver.solve()
+                np.testing.assert_allclose(result.projection, dykstra, rtol=0.0, atol=1e-12)
+                self.assertGreater(max(jumps, default=0), 100)
+
     def test_duplicated_half_space_does_not_force_an_exact_cycle_every_cycle(self) -> None:
         # The idle copy's row of R is a cancellation, so its entries are rounding noise;
         # a floor built from that cancelled row instead of the magnitudes it was formed
