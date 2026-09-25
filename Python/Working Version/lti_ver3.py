@@ -22,12 +22,13 @@ def rigorous_deactivation_horizon(G: float, beta: float, alpha: float, rho: floa
     if beta >= 0.0:
         return np.inf
 
-    # Bracket the descending root, then bisect (L is concave)
+    # Bracket the descending root, then bisect (L is concave); past the cap the last
+    # bracket point still has L > 0, so the whole run up to it is certified
     hi = 2.0
     while L(hi) > 0.0:
         hi *= 2.0
         if hi > 1e7:
-            return np.inf
+            return hi / 2.0
     lo = hi / 2.0
     for _ in range(200):
         if hi - lo <= 1e-12:
@@ -53,8 +54,6 @@ class LTIVer3Solver(LTIVer2Solver):
 
     def _jump_length(self, cf: _CF, t: int, z_t: np.ndarray) -> int:
         """Switch-free jump length."""
-        if self.rho <= 0.0:
-            return 0
         z_norm = float(np.linalg.norm(z_t))
 
         # No jump while an inactive slack g_j could reach zero within its envelope
