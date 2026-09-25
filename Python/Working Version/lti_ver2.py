@@ -7,13 +7,11 @@ import numpy as np
 from lti_ver1 import LTIVer1Solver
 from projection_result import ProjectionResult
 
-# A drift beta_m or floor Gamma_j smaller than this counts as zero
-_BETA_TOL = 1e-9
-
 # Constants of one episode: the cycle map A_m, its fixed point x_inf, the matrix
 # RIA = R (I - A_m)^-1, the levels G and drifts beta of the auxiliaries (floors
-# Gamma on inactive rows), the row norms of RIA and R, and the activity masks
-_CF = namedtuple("_CF", "A_m x_inf RIA G beta row_RIA row_R active inactive")
+# Gamma on inactive rows), the rounding level of beta, the row norms of RIA and R,
+# and the activity masks
+_CF = namedtuple("_CF", "A_m x_inf RIA G beta beta_floor row_RIA row_R active inactive")
 
 
 class LTIVer2Solver(LTIVer1Solver):
@@ -41,8 +39,13 @@ class LTIVer2Solver(LTIVer1Solver):
         G = self.y + RIA @ z_0
         beta = self.R @ x_inf + self.s
         return _CF(A_m=self.A_m, x_inf=x_inf, RIA=RIA, G=G, beta=beta,
+                   beta_floor=self._drift_floor(x_inf),
                    row_RIA=np.linalg.norm(RIA, axis=1), row_R=np.linalg.norm(self.R, axis=1),
                    active=active, inactive=~active)
+
+    def _drift_floor(self, x_inf: np.ndarray) -> np.ndarray:
+        """Rounding level of the drifts."""
+        return self._rounding_floor(np.abs(self.R) @ np.abs(x_inf) + self.s_scale)
 
     @staticmethod
     def _active_auxiliaries(cf: _CF, t: int, z_t: np.ndarray) -> np.ndarray:
@@ -52,15 +55,15 @@ class LTIVer2Solver(LTIVer1Solver):
 
     def _active_set_is_final(self, cf: _CF, t: int, z_t: np.ndarray) -> bool:
         """No further activity change."""
-        # Every later transient is bounded by the current ||z_t||
+        # Every later transient is bounded by the current ||z_t||; a drift is zero
+        # only up to rounding, since any real drain reaches zero eventually
         z_norm = float(np.linalg.norm(z_t))
         active_ok = not cf.active.any() or (
-            np.all(cf.beta[cf.active] >= -_BETA_TOL)
+            np.all(cf.beta[cf.active] >= -cf.beta_floor[cf.active])
             and np.all(cf.G[cf.active] + t * cf.beta[cf.active]
                        - cf.row_RIA[cf.active] * z_norm > 0.0))
-        inactive_ok = not cf.inactive.any() or (
-            np.all(cf.beta[cf.inactive] <= _BETA_TOL)
-            and np.all(cf.beta[cf.inactive] + cf.row_R[cf.inactive] * z_norm < 0.0))
+        inactive_ok = not cf.inactive.any() or np.all(
+            cf.beta[cf.inactive] + cf.row_R[cf.inactive] * z_norm < 0.0)
         return active_ok and inactive_ok
 
     def _settle_at_fixed_point(self, cf: _CF, cycle: int, t: int) -> None:

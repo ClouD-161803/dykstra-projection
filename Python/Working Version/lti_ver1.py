@@ -6,6 +6,10 @@ import numpy as np
 from convex_projection_solver import ConvexProjectionSolver
 from projection_result import ProjectionResult
 
+# Rounding allowed, in units of eps times the magnitudes that cancel, before a
+# quantity that is zero in exact arithmetic counts as nonzero
+_ROUNDING_UNITS = 64
+
 
 class LTIVer1Solver(ConvexProjectionSolver):
     """Dykstra via its cycle map."""
@@ -19,6 +23,11 @@ class LTIVer1Solver(ConvexProjectionSolver):
     def _update_error(self, m: int, x_temp: np.ndarray, x: np.ndarray, index: int) -> None:
         """Dykstra's auxiliary update."""
         self.e[m] = self.e[index] + (x_temp - x)
+
+    @staticmethod
+    def _rounding_floor(magnitude: np.ndarray) -> np.ndarray:
+        """Rounding level of a sum."""
+        return _ROUNDING_UNITS * np.finfo(float).eps * magnitude
 
     def _prepare(self) -> None:
         """Normalise the half-spaces."""
@@ -72,6 +81,7 @@ class LTIVer1Solver(ConvexProjectionSolver):
         q = np.zeros(p)
         R = np.zeros((self.n, p))
         s = np.zeros(self.n)
+        s_scale = np.zeros(self.n)
 
         for m in range(self.n):
             unit_normal, unit_offset = self.unit_A[m], self.unit_b[m]
@@ -79,6 +89,7 @@ class LTIVer1Solver(ConvexProjectionSolver):
             # Row m of the auxiliary update y_m += a_m . x_{m-1} - b_m
             R[m] = P.T @ unit_normal
             s[m] = float(unit_normal @ q) - unit_offset
+            s_scale[m] = float(np.abs(unit_normal) @ np.abs(q)) + abs(unit_offset)
 
             # Advance the prefix map through the projector M_m = I - a_m a_m^T
             if active[m]:
@@ -88,6 +99,7 @@ class LTIVer1Solver(ConvexProjectionSolver):
 
         # After all n half-spaces the prefix map is the cycle map A_m, B_m
         self.A_m, self.B_m, self.R, self.s = P, q, R, s
+        self.s_scale = s_scale
         self.active = tuple(active)
 
     def _advance_cycle(self) -> None:
