@@ -91,20 +91,19 @@ traces. `VerticalVisualiser` combines the activity traces on one lower axis.
 
 ## LTI solver experiments
 
-The `lti_ver*.py` modules are research-oriented accelerations of Dykstra's
-method. They exploit episodes in which the active half-space set is unchanged,
-while retaining exact cycles whenever that set changes. Each uses the same
-`A @ x <= b` problem definition as the core solvers.
+`lti_solver.py` holds research-oriented accelerations of Dykstra's method. Between changes of the active half-space set, Dykstra's iteration is a linear time-invariant system, so an episode of constant activity can be stepped through its cycle map, evaluated in closed form or skipped, with one exact Dykstra cycle whenever the set changes. They use the same `A @ x <= b` problem definition as the core solvers.
 
-- `lti_ver1.py` applies a linear cycle map while the active set is fixed.
-- `lti_ver2.py` evaluates constant-activity episodes in closed form.
-- `lti_ver3.py` adds envelope-bounded jumps over certified switch-free cycles.
-- `lti_ver4.py` fast-forwards frozen-stall episodes.
-- `lti_ver5.py` adds deflated modal episodes for rank-deficient active normals.
-- `oracle.py` records a known activity schedule and replays it for comparison.
+`LTISolver` runs one of five presets, each adding one technique to the one before so that their effect can be compared. `LTIVer1Solver` to `LTIVer5Solver` name them:
 
-Run any version from the working-code directory; every solver has a matching
-runner, for example:
+- `cycle_map` (`LTIVer1Solver`) steps every cycle through the episode's cycle map.
+- `closed_form` (`LTIVer2Solver`) evaluates regular episodes in closed form and settles once the active set is proven final.
+- `envelope` (`LTIVer3Solver`) also jumps the runs of cycles an envelope bound certifies switch-free.
+- `frozen_stall` (`LTIVer4Solver`) also fast-forwards frozen stalls, in which only the auxiliaries move.
+- `deflated_modal` (`LTIVer5Solver`) also scans singular episodes in their deflated modal form, and settles only on a point that passes the KKT test.
+
+`lti_numerics.py` holds the numerical pieces free of solver state. `oracle.py` uses them too: it records one Dykstra run's activity schedule and replays it with every change known in advance, for comparison.
+
+Run any preset from the working-code directory; each has a matching runner, for example:
 
 ```bash
 cd "Python/Working Version"
@@ -160,8 +159,9 @@ python -m unittest discover -s tests -v
 │   │   ├── projection_result.py
 │   │   ├── gradient.py
 │   │   ├── edge_rounder.py
+│   │   ├── lti_solver.py         # LTISolver and its five presets
+│   │   ├── lti_numerics.py       # Cycle maps, closed forms, the KKT test
 │   │   ├── lti_examples.py       # Shared LTI demo setup
-│   │   ├── lti_ver1.py … lti_ver5.py
 │   │   ├── oracle.py             # Activity-schedule replay experiment
 │   │   └── bin/                 # Legacy helper implementations
 │   └── Previous Versions/       # Development history
