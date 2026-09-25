@@ -278,9 +278,12 @@ def stall_crossing(y: np.ndarray, delta: np.ndarray, delta_floor: np.ndarray,
     """Cycles until the first crossing."""
     crossing = np.inf
 
-    # A draining active auxiliary reaches zero after ceil(y_m / -delta_m) cycles
+    # A draining active auxiliary reaches zero after ceil(y_m / -delta_m) cycles, and
+    # one already at zero on the next
     for m in np.where(active)[0]:
-        if delta[m] < -delta_floor[m] and y[m] > 0.0:
+        if delta[m] < -delta_floor[m] and y[m] <= 0.0:
+            crossing = min(crossing, 1)
+        elif delta[m] < -delta_floor[m]:
             # A crossing past the limit is never taken, and above 2**53 refining it one
             # cycle at a time takes about ratio / 2**53 steps, which never finishes at
             # ratios like 1e30
