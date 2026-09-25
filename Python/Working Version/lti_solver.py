@@ -48,7 +48,15 @@ class LTISolver(ConvexProjectionSolver):
 
     def __init__(self, *args, preset: str | None = None, eig_cond_cap: float = 1e8,
                  block_size: int = 4096, **kwargs) -> None:
-        """Solver options."""
+        """
+        Initialise the solver; the other arguments are those of ConvexProjectionSolver.
+
+        Args:
+            preset: One of PRESETS; defaults to the class's PRESET.
+            eig_cond_cap: Largest condition number of the modal basis the
+                deflated_modal scan accepts before stepping the episode instead.
+            block_size: Cycles the deflated_modal scan evaluates at once.
+        """
         preset = self.PRESET if preset is None else preset
         if preset not in PRESETS:
             raise ValueError(f"preset must be one of {', '.join(PRESETS)}.")
@@ -75,6 +83,7 @@ class LTISolver(ConvexProjectionSolver):
     @property
     def settled(self) -> bool:
         """Result proven to be the projection."""
+        # Unlike result.is_settled(), false for a limit proven only final
         return self.certificate == "kkt"
 
     def _update_error(self, m: int, x_temp: np.ndarray, x: np.ndarray, index: int) -> None:
