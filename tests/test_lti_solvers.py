@@ -997,6 +997,92 @@ class LTISolverRegressionTests(unittest.TestCase):
         self.assertLessEqual(len(exact_cycles), 5)
         np.testing.assert_allclose(result.projection, dykstra, rtol=0.0, atol=1e-12)
 
+    def test_idle_equality_member_is_not_deactivated_by_extrapolated_noise(self) -> None:
+        # Rows 2 and 3 are one equality whose idle member's closed-form level is about
+        # 1e-16; extrapolating its rounding-level drift predicted a deactivation every few
+        # cycles, although beyond rounding Dykstra's active set changes only on cycles 1,
+        # 3 and 213. A
+        # rotation leaves the idle member a level of 2e-17 and a drift of -6e-17, so its
+        # envelope sits a rounding below zero; a finality test that demanded more than
+        # zero never settled
+        z = np.array([2.123990954406353, -0.637538099587164, -2.3956531502907614])
+        A = np.array([[1.7999026569851142, -1.1815357523700907, 2.472632658948878],
+                      [-1.7999026569851142, 1.1815357523700907, -2.472632658948878],
+                      [-1.3899587810264784, -0.8436204358084737, -2.7859706230363614],
+                      [1.3899587810264784, 0.8436204358084737, 2.7859706230363614],
+                      [-0.5195907807279956, 1.645971706939836, -1.6165540552440476],
+                      [0.7759963200092239, -0.20774581101982423, -0.15846391220537137],
+                      [-0.05871377157385623, -0.42487405236776804, -0.616659492795013]])
+        b = np.array([3.228013483274614, -3.228013483274614, -0.7630585290502137, 0.7630585290502137,
+                      -2.4382627339032013, 1.0359964173613583, 0.9908022030042619])
+        Q = np.array([[-0.7722867445531958, 0.5892226733279852, -0.23746541942701752],
+                      [-0.6268218243368439, -0.645999755365975, 0.4356359909398344],
+                      [0.1032840003217232, 0.48528440867528716, 0.8682346790898294]])
+        orientations = {"original": (z, A), "rotated": (Q @ z, A @ Q.T)}
+        for orientation, (z, A) in orientations.items():
+            for solver_type in (LTIVer2Solver, LTIVer3Solver, LTIVer4Solver, LTIVer5Solver):
+                with self.subTest(orientation=orientation, solver=solver_type.__name__):
+                    solver = solver_type(z, A, b, max_iter=300)
+                    exact_cycles = spy_exact_cycles(solver)
+                    result = solver.solve()
+                    self.assertLessEqual(len(exact_cycles), 6)
+                    self.assertTrue(result.is_settled())
+                    np.testing.assert_allclose(result.projection, solver.actual_projection, rtol=0.0, atol=1e-9)
+
+    def test_real_drain_leaves_the_closed_form_where_dykstra_drops_it(self) -> None:
+        # Row 1 drains at 1.75 times the rounding of its drift, and Dykstra drops it on
+        # cycle 202; allowing that rounding t times, as for an idle drift, delayed the
+        # drop to cycle 468, off Dykstra's path
+        z = np.array([1.0 + 3e-11, 1.0 + 1e-11])
+        A = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+        b = np.array([1.0, 1.0, 2.0 - 1e-13])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=300, plot_errors=True).solve()
+        for solver_type in (LTIVer2Solver, LTIVer3Solver, LTIVer4Solver):
+            with self.subTest(solver=solver_type.__name__):
+                solver = solver_type(z, A, b, max_iter=300, plot_errors=True)
+                exact_cycles = spy_exact_cycles(solver)
+                result = solver.solve()
+                self.assertIn(202, exact_cycles)
+                end = result.settled_at if result.is_settled() else 301
+                np.testing.assert_allclose(result.errors_for_plotting[:end - 1],
+                                           dykstra.errors_for_plotting[:end - 1], rtol=0.0, atol=1e-13)
+
+    def test_modal_scan_does_not_deactivate_an_idle_equality_member_on_noise(self) -> None:
+        # Rows 2 and 3 are one equality and no row touches the fourth coordinate, so the
+        # episodes are singular and, with the certificate set aside, scanned in modal
+        # form; extrapolated rounding on the idle member's auxiliary predicted a
+        # deactivation every few cycles, although beyond rounding Dykstra's active set
+        # changes only on cycles 1, 27 and 78
+        z = np.array([-3.6529827615285546, 3.3126824887562547, -7.651149264010826, -5.105167330200679])
+        A = np.array([[-1.497852906366799, 1.7167847883737464, -0.10525262424400268, 0.0],
+                      [0.12352979103860766, 0.11445557886335492, -0.31756464855181005, 0.0],
+                      [-0.3529758312961161, -1.2871889808807873, 0.08561175478683569, 0.0],
+                      [0.3529758312961161, 1.2871889808807873, -0.08561175478683569, 0.0],
+                      [-1.361837430913596, -1.4141450630731343, 0.2556685680932052, 0.0]])
+        b = np.array([4.068245616354629, 0.43479756153641425, -1.1813464847881878, 1.1813464847881878,
+                      -0.6166914151530024])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=300).solve().projection
+        solver = LTIVer5Solver(z, A, b, max_iter=300)
+        exact_cycles = spy_exact_cycles(solver)
+        with mock.patch.object(lti_solver, "kkt_certificate", return_value=None):
+            result = solver.solve()
+        self.assertLessEqual(len(exact_cycles), 3)
+        np.testing.assert_allclose(result.projection, dykstra, rtol=0.0, atol=1e-12)
+
+    def test_modal_scan_drops_a_real_drain_where_dykstra_does(self) -> None:
+        # No row touches the third coordinate, so the episode is scanned in modal form;
+        # row 1 drains at five times the rounding of its drift, and allowing that
+        # rounding t times moved its switch from cycle 183 to 229
+        z = np.array([1.0 + 9e-11, 1.0 + 3e-11, 4.0])
+        A = np.array([[1.0, 0.0, 0.0], [0.3, 1.0, 0.0], [1.0, 1.0, 0.0]])
+        b = np.array([1.0, 1.3, 2.0 - 3e-13])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=300, plot_errors=True).solve()
+        solver = LTIVer5Solver(z, A, b, max_iter=300, plot_errors=True)
+        with mock.patch.object(lti_solver, "kkt_certificate", return_value=None):
+            result = solver.solve()
+        np.testing.assert_allclose(result.errors_for_plotting, dykstra.errors_for_plotting,
+                                   rtol=0.0, atol=1e-13)
+
     def test_record_schedule_rejects_an_invalid_budget(self) -> None:
         z, A, b = box_line_problem()
         for max_iter in (-1, 1.5, True):
