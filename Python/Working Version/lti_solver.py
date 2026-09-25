@@ -254,6 +254,7 @@ class LTISolver(ConvexProjectionSolver):
         mu = (cf.RIA @ Q) @ V * coords[None, :]
         nu = (self.cmap.R @ Q) @ V * coords[None, :]
         abs_lam, env_y, env_g = np.abs(lam), np.abs(mu), np.abs(nu)
+        env_y_scale = (cf.RIA_scale @ np.abs(Q)) @ np.abs(V) * np.abs(coords)[None, :]
 
         def modal_state(t: int) -> tuple:
             """State and auxiliaries at cycle t."""
@@ -279,7 +280,7 @@ class LTISolver(ConvexProjectionSolver):
             lam_powers_prev = lam[None, :] ** (t_range[:, None] - 1)
             y_vals = cf.G[None, :] + t_range[:, None] * cf.beta[None, :] - (lam_powers @ mu.T).real
             g_vals = cf.beta[None, :] + (lam_powers_prev @ nu.T).real
-            y_floor = auxiliary_floor(cf, t_range[:, None]) + rounding_floor(np.abs(lam_powers) @ env_y.T)
+            y_floor = auxiliary_floor(cf, t_range[:, None]) + rounding_floor(np.abs(lam_powers) @ env_y_scale.T)
             signs = np.where(active[None, :], y_vals > -y_floor, g_vals > g_floor[None, :])
             flip_rows = np.where(((signs != active[None, :]) & watch[None, :]).any(axis=1))[0]
 

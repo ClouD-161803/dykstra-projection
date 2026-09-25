@@ -35,11 +35,12 @@ _KKT_ACCURACY = 1e-9
 # orthonormal basis of the active normals, the only directions a cycle moves
 CycleMap = namedtuple("CycleMap", "active A_m B_m R R_scale s s_scale span")
 
-# Constants of one episode's closed form: its fixed point x_inf, RIA = R (I - A_m)^-1,
-# the levels G and drifts beta of the auxiliaries (floors Gamma on inactive rows), the
-# rounding levels of G and beta, the row norms of RIA and R, and the activity masks
-ClosedForm = namedtuple("ClosedForm",
-                        "A_m x_inf RIA G G_floor beta beta_floor row_RIA row_R active inactive")
+# Constants of one episode's closed form: its fixed point x_inf, RIA = R (I - A_m)^-1
+# and the magnitudes RIA_scale its rounding comes from, the levels G and drifts beta
+# of the auxiliaries (floors Gamma on inactive rows), the rounding levels of G and
+# beta, the row norms of RIA and R, and the activity masks
+ClosedForm = namedtuple("ClosedForm", "A_m x_inf RIA RIA_scale G G_floor beta beta_floor row_RIA "
+                                      "row_R active inactive")
 
 
 def rounding_floor(magnitude: np.ndarray) -> np.ndarray:
@@ -138,14 +139,23 @@ def is_frozen(cmap: CycleMap, x: np.ndarray) -> bool:
 
 
 def _closed_form(cmap: CycleMap, x: np.ndarray, y: np.ndarray, x_inf: np.ndarray,
-                 RIA: np.ndarray) -> ClosedForm:
+                 RIA: np.ndarray, resolvent: np.ndarray) -> ClosedForm:
     """Constants around a fixed point."""
     # Level G_m of each auxiliary without its transient z_0 = x - x_inf, drift beta_m
-    # per cycle, and the rounding level of each
+    # per cycle, and the rounding level of each. A row of R that cancelled to the
+    # rounding of the magnitudes it was formed from is noise, and so is its row of RIA:
+    # only such a row takes its rounding from those magnitudes through the resolvent,
+    # since charging every row with the resolvent's condition would hide real drains
     active = np.array(cmap.active)
     z_0 = x - x_inf
-    return ClosedForm(A_m=cmap.A_m, x_inf=x_inf, RIA=RIA, G=y + RIA @ z_0,
-                      G_floor=rounding_floor(np.abs(y) + np.abs(RIA) @ np.abs(z_0)),
+    R_norm = np.linalg.norm(cmap.R, axis=1)
+    R_rounding = rounding_floor(np.linalg.norm(cmap.R_scale, axis=1))
+    cancelled = R_norm <= R_rounding
+    RIA_scale = np.abs(RIA)
+    if cancelled.any():
+        RIA_scale[cancelled] = cmap.R_scale[cancelled] @ np.abs(np.linalg.inv(resolvent))
+    return ClosedForm(A_m=cmap.A_m, x_inf=x_inf, RIA=RIA, RIA_scale=RIA_scale, G=y + RIA @ z_0,
+                      G_floor=rounding_floor(np.abs(y) + RIA_scale @ np.abs(z_0)),
                       beta=cmap.R @ x_inf + cmap.s,
                       beta_floor=rounding_floor(cmap.R_scale @ np.abs(x_inf) + cmap.s_scale),
                       row_RIA=np.linalg.norm(RIA, axis=1), row_R=np.linalg.norm(cmap.R, axis=1),
@@ -156,7 +166,7 @@ def closed_form(cmap: CycleMap, x: np.ndarray, y: np.ndarray, IA: np.ndarray) ->
     """Closed form of a regular episode."""
     # Fixed point x_inf = (I - A_m)^-1 B_m, by solves rather than an explicit inverse,
     # which loses cond * eps
-    return _closed_form(cmap, x, y, np.linalg.solve(IA, cmap.B_m), np.linalg.solve(IA.T, cmap.R.T).T)
+    return _closed_form(cmap, x, y, np.linalg.solve(IA, cmap.B_m), np.linalg.solve(IA.T, cmap.R.T).T, IA)
 
 
 def deflated_closed_form(cmap: CycleMap, x: np.ndarray, y: np.ndarray) -> ClosedForm | None:
@@ -172,7 +182,7 @@ def deflated_closed_form(cmap: CycleMap, x: np.ndarray, y: np.ndarray) -> Closed
     if np.linalg.cond(IAP) >= RESOLVENT_COND_CAP:
         return None
     x_inf = P_1 @ x + Q @ (Q.T @ np.linalg.solve(IAP, cmap.B_m - P_1 @ cmap.B_m))
-    return _closed_form(cmap, x, y, x_inf, np.linalg.solve(IAP.T, cmap.R.T).T)
+    return _closed_form(cmap, x, y, x_inf, np.linalg.solve(IAP.T, cmap.R.T).T, IAP)
 
 
 def active_auxiliaries(cf: ClosedForm, t: int, z_t: np.ndarray) -> np.ndarray:
@@ -197,7 +207,7 @@ def closed_form_activity(cf: ClosedForm, cmap: CycleMap, t: int, y_t: np.ndarray
     # which is all the idle member of an equality written as two half-spaces shows
     g_t = cf.beta + cmap.R @ z_prev
     g_floor = cf.beta_floor + rounding_floor(cmap.R_scale @ np.abs(z_prev))
-    y_floor = auxiliary_floor(cf, t) + rounding_floor(np.abs(cf.RIA) @ np.abs(z_t))
+    y_floor = auxiliary_floor(cf, t) + rounding_floor(cf.RIA_scale @ np.abs(z_t))
     return np.where(cf.active, y_t > -y_floor, g_t > g_floor)
 
 
