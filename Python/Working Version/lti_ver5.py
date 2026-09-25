@@ -142,8 +142,7 @@ class LTIVer5Solver(LTIVer4Solver):
         active = multipliers > 0.0
         self._set_state(x, multipliers, active)
         self.settled_at, self.certificate = first_cycle, "kkt"
-        for cycle in range(first_cycle, self.max_iter + 1):
-            self._record_cycle(cycle, tuple(active))
+        self._record_limit(first_cycle, active)
 
     def _kkt_slack_scale(self, x: np.ndarray) -> np.ndarray:
         """Magnitudes each slack is computed from."""

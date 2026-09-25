@@ -36,6 +36,7 @@ class LTIVer1Solver(ConvexProjectionSolver):
         for index, (row, offset) in enumerate(zip(self.A, self.b)):
             self.unit_A[index], self.unit_b[index] = self._normalise(row, offset)
         self.y = np.zeros(self.n)
+        self._recorded_y = np.zeros(self.n)
 
     def _sync_y_from_e(self) -> None:
         """Scalar auxiliaries from vectors."""
@@ -70,6 +71,7 @@ class LTIVer1Solver(ConvexProjectionSolver):
 
         # The active set collects the half-spaces with y_m > 0
         self._sync_y_from_e()
+        self._recorded_y = self.y.copy()
         return tuple(self.y > 0.0)
 
     def _build_cycle_map(self, active: tuple) -> None:
@@ -113,6 +115,33 @@ class LTIVer1Solver(ConvexProjectionSolver):
         y_next = self.y + delta
         return tuple(y_next > 0.0), y_next
 
+    def _replay_cycle(self, cycle: int, active: tuple | np.ndarray) -> None:
+        """Record an episode cycle as Dykstra runs it."""
+        # Within an episode an active half-space projects the point onto its boundary
+        # and an inactive one leaves it alone, so the intermediate points and the
+        # auxiliaries of a cycle the solver skipped follow from the previous row
+        x = self.x_historical[cycle - 1][-1].copy()
+        y = np.where(active, self._recorded_y, 0.0)
+        for m in range(self.n):
+            if active[m]:
+                slack = float(self.unit_A[m] @ x) - self.unit_b[m]
+                x = x - slack * self.unit_A[m]
+                y[m] += slack
+            self.x_historical[cycle][m] = x
+        self._recorded_y = y
+        if self.plot_errors:
+            self.errors_for_plotting[cycle - 1] = y[:, None] * self.unit_A
+        self._track_error_at(cycle, x)
+
+    def _track_error_at(self, cycle: int, x: np.ndarray) -> None:
+        """Track the error of a recorded point."""
+        # The base tracker reads self.x, which after a jump is the landing state
+        state, self.x = self.x, x
+        try:
+            self._track_error(cycle)
+        finally:
+            self.x = state
+
     def _record_activity(self, cycle: int, active: tuple) -> None:
         """Store the active set."""
         for m in range(self.n):
@@ -146,17 +175,14 @@ class LTIVer1Solver(ConvexProjectionSolver):
             if active_next != self.active:
                 self._sync_e_from_y()
                 self._build_cycle_map(self._dykstra_cycle(cycle))
+                self._track_error(cycle)
             else:
                 self.y = np.where(np.array(active_next), y_next, 0.0)
                 self._sync_e_from_y()
                 self._advance_cycle()
-                self.x_historical[cycle][:, :] = self.x
-                if self.plot_errors:
-                    for m in range(self.n):
-                        self.errors_for_plotting[cycle - 1][m] = self.e[m].copy()
+                self._replay_cycle(cycle, self.active)
 
-            # Track the squared error and activity after each complete cycle
-            self._track_error(cycle)
+            # Track the activity after each complete cycle
             if self.plot_active_halfspaces:
                 self._record_activity(cycle, self.active)
 
