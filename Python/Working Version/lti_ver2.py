@@ -169,6 +169,9 @@ class LTIVer2Solver(LTIVer1Solver):
         active = self._dykstra_cycle(1)
         self._record_cycle(1, active, record_path=False)
         if self.n == 0:
+            # Without constraints the state never moves, so every cycle repeats cycle 1
+            for cycle in range(2, self.max_iter + 1):
+                self._record_cycle(cycle, active, record_path=False)
             return self._format_output()
 
         # Episodes of constant activity, each ended by an exact switching cycle
