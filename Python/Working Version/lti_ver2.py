@@ -52,6 +52,14 @@ class LTIVer2Solver(LTIVer1Solver):
         """Rounding level of the drifts."""
         return self._rounding_floor(np.abs(self.R) @ np.abs(x_inf) + self.s_scale)
 
+    def _predicted_activity(self, cf: _CF, y_t: np.ndarray, z_prev: np.ndarray) -> np.ndarray:
+        """Signs of a cycle's auxiliaries and slacks."""
+        # Slack g_j = beta_j + R_j z_{t-1}; an inactive half-space reactivates only
+        # on a slack above rounding
+        g_t = cf.beta + self.R @ z_prev
+        floor = cf.beta_floor + self._rounding_floor(np.abs(self.R) @ np.abs(z_prev))
+        return np.where(cf.active, y_t > 0.0, g_t > floor)
+
     @staticmethod
     def _active_auxiliaries(cf: _CF, t: int, z_t: np.ndarray) -> np.ndarray:
         """Closed-form active auxiliaries."""
@@ -61,14 +69,15 @@ class LTIVer2Solver(LTIVer1Solver):
     def _active_set_is_final(self, cf: _CF, t: int, z_t: np.ndarray) -> bool:
         """No further activity change."""
         # Every later transient is bounded by the current ||z_t||; a drift is zero
-        # only up to rounding, since any real drain reaches zero eventually
+        # only up to rounding, since any real drain reaches zero eventually, and an
+        # inactive slack must stay within the rounding its prediction ignores
         z_norm = float(np.linalg.norm(z_t))
         active_ok = not cf.active.any() or (
             np.all(cf.beta[cf.active] >= -cf.beta_floor[cf.active])
             and np.all(cf.G[cf.active] + t * cf.beta[cf.active]
                        - cf.row_RIA[cf.active] * z_norm > 0.0))
         inactive_ok = not cf.inactive.any() or np.all(
-            cf.beta[cf.inactive] + cf.row_R[cf.inactive] * z_norm < 0.0)
+            cf.beta[cf.inactive] + cf.row_R[cf.inactive] * z_norm <= cf.beta_floor[cf.inactive])
         return active_ok and inactive_ok
 
     def _settle_at_fixed_point(self, cf: _CF, cycle: int, t: int) -> None:
@@ -89,8 +98,7 @@ class LTIVer2Solver(LTIVer1Solver):
             # Transient z_t = A_m z_{t-1}, auxiliaries y_m and slacks g_j at cycle t
             z_t = cf.A_m @ z_prev
             y_t = self._active_auxiliaries(cf, t, z_t)
-            g_t = cf.beta + self.R @ z_prev
-            active_t = np.where(cf.active, y_t, g_t) > 0.0
+            active_t = self._predicted_activity(cf, y_t, z_prev)
 
             # Stop just before the cycle on which the active set changes
             if not np.array_equal(active_t, cf.active):
