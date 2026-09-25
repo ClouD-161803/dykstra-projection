@@ -4,7 +4,7 @@ Instructions for any coding agent working in this repository. `ARCHITECTURE.md`,
 
 ## What this is
 
-A Python implementation of Dykstra's algorithm for projecting a point onto the intersection of finitely many half-spaces, plus two experimental variants, 2-D visualisers, CSV export, and the LaTeX report that uses them. Research code behind a single-author paper, not a library: there is no package, no installer, and no public API to keep stable.
+A Python implementation of Dykstra's algorithm for projecting a point onto the intersection of finitely many half-spaces, plus two experimental variants, the LTI-accelerated solvers, 2-D visualisers, CSV export, and the LaTeX report that uses them. Research code behind a single-author paper, not a library: there is no package, no installer, and no public API to keep stable.
 
 Author: Claudio Vestini, University of Oxford. Funded by Keble Research Grant KSRG118.
 
@@ -25,11 +25,15 @@ Python/Working Version/        the only code that matters
   visualiser.py                ResultExporter, Visualiser, VerticalVisualiser, ComparisonVisualiser
   gradient.py                  quadprog_solve_qp, the QP reference projection
   edge_rounder.py              rounded_box_constraints, polygonal corner rounding
+  lti_solver.py                LTISolver, its five presets, LTIVer1Solver to LTIVer5Solver
+  lti_numerics.py              cycle maps, closed forms, envelope horizons, the KKT certificate
+  oracle.py                    replays a recorded activity schedule, for comparison
+  lti_examples.py, run_*.py    the shared LTI example and one runner per preset and the oracle
   main.py                      interactive 2-D example
   paper_figure.py              the comparison figure used in the paper
   bin/                         legacy helper implementations, superseded, kept for reference
 Python/Previous Versions/      Versions 1-9, development history. READ-ONLY. Never edit or refactor.
-tests/                         three unittest files, run from the repo root
+tests/                         four unittest files, run from the repo root
 Latex/Current Version/         the report and paper sources; Initial Version/ is superseded
 results/                       saved experiment CSVs
 ```
@@ -55,7 +59,7 @@ Do not run this code under Python 3.14. `numpy==2.1.1` has no wheel for it, so t
 
 ```bash
 # tests, from the repo root
-python -m unittest discover -s tests -v          # 16 test methods on master
+python -m unittest discover -s tests -v          # 78 test methods
 
 # the interactive example (needs a GUI matplotlib backend)
 cd "Python/Working Version" && python main.py
@@ -80,7 +84,7 @@ The test files put `Python/Working Version` on `sys.path` themselves. There is n
 ## Git
 
 - **Never commit.** Stage with `git add` and hand back a suggested message; the author reviews and commits. On the author's machine a hook enforces this.
-- `master` is the default branch. `lti-solvers` carries PR #2 (five LTI solver variants, an oracle, and `tests/test_lti_solvers.py`), open as of 2026-09-16.
+- `master` is the default branch. `lti-solvers` carries PR #2 (the LTI solvers with their five presets, an oracle, and `tests/test_lti_solvers.py`), open as of 2026-09-16.
 - Agent instructions belong in this file. On the author's machine `CLAUDE.md` is gitignored globally, so a `CLAUDE.md` here would be invisible to git and would never reach anyone through the remote.
 - Do not commit PDFs, build artefacts or duplicate copies of files that already exist elsewhere in the tree.
 
