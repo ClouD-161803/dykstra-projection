@@ -984,6 +984,23 @@ class LTISolverRegressionTests(unittest.TestCase):
                                            rtol=0.0, atol=1e-12)
                 self.assertGreater(max(jumps, default=0), 100)
 
+    def test_stall_jump_leaves_a_drained_auxiliary_to_the_exact_cycle(self) -> None:
+        # Row 0's auxiliary drains to exactly 0 on cycle 65 with the state frozen; Dykstra
+        # drops the row there, but the stepped prediction keeps it active at zero, and a
+        # crossing search that only looked at positive auxiliaries jumped on with it still
+        # active, past cycle 66, where Dykstra's state moves
+        z = np.array([33.0, 0.0, 0.0])
+        A = np.array([[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
+        b = np.array([1.0, 0.875, 0.5])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=100, plot_errors=True).solve()
+        for solver_type in (LTIVer4Solver, LTIVer5Solver):
+            with self.subTest(solver=solver_type.__name__):
+                result = solver_type(z, A, b, max_iter=100, plot_errors=True).solve()
+                end = result.settled_at if result.is_settled() else 101
+                np.testing.assert_allclose(result.path[:end], dykstra.path[:end], rtol=0.0, atol=1e-12)
+                np.testing.assert_allclose(result.errors_for_plotting[:end - 1],
+                                           dykstra.errors_for_plotting[:end - 1], rtol=0.0, atol=1e-12)
+
     def test_settlement_does_not_depend_on_the_orientation_of_the_problem(self) -> None:
         # Every active drift is zero up to rounding; a rotation turns some of them from
         # +1e-16 to -4e-16, which the jump once read as a drain and so never settled
