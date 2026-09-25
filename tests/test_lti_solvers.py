@@ -168,10 +168,56 @@ class LTISolverRegressionTests(unittest.TestCase):
                 np.testing.assert_allclose(result.projection, expected_result(result, solver, dykstra),
                                            rtol=0.0, atol=1e-9 if result.is_settled() else 1e-12)
 
+    def test_every_version_ignores_unrelated_coordinates_and_problem_size(self) -> None:
+        # A coordinate no normal touches, or a uniform rescaling, leaves the projection
+        # unchanged in the problem's own length scale, the last entry of each case
+        cases = {
+            "unrelated coordinate of 1e9": (
+                np.array([-2.0, 1.4, 1e9]),
+                np.array([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [-0.5, -1.0, 0.0]]),
+                np.array([1.0, 1.0, -1.0]),
+                1.0,
+            ),
+            "unrelated coordinate of 1e6": (
+                np.array([0.5, -1.0, 1e6]),
+                np.array([[-0.5, -2.0, 0.0], [2.0, -1.0, 0.0], [2.0, -2.0, 0.0]]),
+                np.array([-0.5, 0.0, -0.5]),
+                1.0,
+            ),
+            "scaled by 1e-9": (
+                1e-9 * np.array([-2.0, 1.4, 0.0]),
+                np.array([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [-0.5, -1.0, 0.0]]),
+                1e-9 * np.array([1.0, 1.0, -1.0]),
+                1e-9,
+            ),
+            "limit of one half-space, scaled by 1e-12": (
+                np.zeros(2),
+                np.array([[-1.0, -1.0], [0.0, 1.0]]),
+                1e-12 * np.array([0.0, -1.0]),
+                1e-12,
+            ),
+        }
+
+        for case_name, (z, A, b, length) in cases.items():
+            reference_solver = DykstraProjectionSolver(z, A, b, max_iter=200)
+            standard_dykstra = reference_solver.solve().projection
+            qp_reference = reference_solver.actual_projection
+            np.testing.assert_allclose(standard_dykstra, qp_reference, rtol=1e-13, atol=1e-7 * length)
+
+            for solver_type in LTI_SOLVERS:
+                with self.subTest(case=case_name, solver=solver_type.__name__):
+                    result = solver_type(z, A, b, max_iter=200).solve()
+                    self.assertLessEqual(float(np.max(A @ result.projection - b)), 1e-8 * length)
+                    np.testing.assert_allclose(result.projection, standard_dykstra,
+                                               rtol=1e-13, atol=1e-7 * length)
+                    np.testing.assert_allclose(result.projection, qp_reference,
+                                               rtol=1e-13, atol=1e-7 * length)
+
     def test_nearly_parallel_rank_deficient_episode_stays_on_the_dykstra_path(self) -> None:
         # Rows 1 and 2 are about 6.5e-6 rad apart, so I - A_m + P_1 has condition about
-        # 7e10 in the first deflated episode, which switches on its first cycle, where
-        # rebuilding the state from the modes left the path by 7e-11
+        # 7e10, where a deflated closed form with an explicit inverse once left the path
+        # by 9e-8; Ver5 now certifies the projection at the episode's entry, before any
+        # deflation, and Ver1-4 step the singular episode
         A = np.array([
             [1.061165117248386, -0.4797851068903314, 1.4493092864891945, -0.644978051185903],
             [0.2640002985508877, 0.2966456083995408, 0.19636328836145112, -0.6327615294046715],
@@ -216,14 +262,15 @@ class LTISolverRegressionTests(unittest.TestCase):
 
     def test_settlement_is_reported_and_recorded_from_its_cycle(self) -> None:
         # Dykstra reaches (-0.25, 0.25) in two cycles and the projection (0, 0) only in
-        # the limit; Ver2-4 prove the active set final on cycle 2
+        # the limit; Ver2-4 prove the active set final on cycle 2, and Ver5 certifies the
+        # projection at that cycle's entry
         z, A, b = np.array([2.0, 1.0]), np.array([[1.0, 0.0], [1.0, 1.0]]), np.zeros(2)
         certificates = {LTIVer1Solver: None, LTIVer2Solver: "finality", LTIVer3Solver: "finality",
-                        LTIVer4Solver: "finality"}
+                        LTIVer4Solver: "finality", LTIVer5Solver: "kkt"}
         for max_iter in (2, 4):
             dykstra = DykstraProjectionSolver(z, A, b, max_iter=max_iter, track_error=True).solve()
             self.assertFalse(dykstra.is_settled())
-            for solver_type in certificates:
+            for solver_type in LTI_SOLVERS:
                 with self.subTest(solver=solver_type.__name__, max_iter=max_iter):
                     result = solver_type(z, A, b, max_iter=max_iter, track_error=True).solve()
                     self.assertEqual(result.certificate, certificates[solver_type])
@@ -262,6 +309,48 @@ class LTISolverRegressionTests(unittest.TestCase):
                     self.assertEqual(metadata["certificate"], result.certificate)
                 else:
                     self.assertNotIn("settled_at", metadata)
+
+    def test_ver5_certifies_only_the_projection(self) -> None:
+        # Each case once returned settled=True away from the projection: a slab whose
+        # walls are 9e-8 rad from parallel and whose limit violates a row by 1.7e-9, rows
+        # 5e-7 inside the loose tight band carrying multipliers, and a wedge whose limit
+        # the resolvent loses
+        theta = 1.5e-6
+        wedge_A = np.array([[0.0, 1.0], [np.sin(theta), -np.cos(theta)]])
+        wedge_apex = np.array([0.3, 0.7])
+        cases = {
+            "thin slab": (
+                np.array([-2.214017695513702, 1.420323277826624]),
+                np.array([[-1.17684612741209, 1.2390550702799208],
+                          [0.9855651633523589, 0.16929651144143015],
+                          [-0.9855651788783955, -0.1692964210560769]]),
+                np.array([7.201498328866286, -0.5652622410478404, 0.56526240210934]),
+            ),
+            "loose tight band": (
+                np.array([-0.20027373229037335, -3.7900904061063447, 4.619121844997523]),
+                np.array([[0.6523873274568803, -0.75788572685707, 0.0],
+                          [-0.7136344148070796, 0.7005183238166988, 0.0],
+                          [-0.7569148072721577, 0.6535135610927691, 0.0]]),
+                np.array([-0.0001124406713453392, 0.015503330040274278, 0.02715164951644004]),
+            ),
+            "loose tight band, second": (
+                np.array([7.266888334528822, -5.520340862055513, 2.5878978909372736]),
+                np.array([[0.09710188189914234, 0.9952744468394861, 0.0],
+                          [0.3123082375331488, -0.9499808233690501, 0.0],
+                          [0.41005948939534226, -0.9120587783453604, 0.0]]),
+                np.array([-2.1844715877611156, 1.8529686415093019, 1.7158369137491483]),
+            ),
+            "ill-conditioned wedge": (wedge_apex + np.array([1.0, 0.5]), wedge_A, wedge_A @ wedge_apex),
+        }
+
+        for case_name, (z, A, b) in cases.items():
+            for max_iter in (200, 2000):
+                with self.subTest(case=case_name, max_iter=max_iter):
+                    solver = LTIVer5Solver(z, A, b, max_iter=max_iter)
+                    result = solver.solve()
+                    if solver.settled:
+                        np.testing.assert_allclose(result.projection, solver.actual_projection,
+                                                   rtol=0.0, atol=1e-8 * np.abs(z).max())
 
     def test_deflated_episode_switching_on_its_first_cycle_keeps_the_dykstra_state(self) -> None:
         # Rows 1-3 span three of the four coordinates, so their episode is deflated,
@@ -327,6 +416,44 @@ class LTISolverRegressionTests(unittest.TestCase):
         self.assertEqual([cycles for _, cycles in schedule], [2])
         np.testing.assert_array_equal(recorded.projection, dykstra)
         np.testing.assert_allclose(replayed.projection, dykstra, rtol=0.0, atol=1e-12 * np.abs(z).max())
+
+    def test_ver5_multipliers_only_on_rows_tight_to_rounding(self) -> None:
+        # Row 0 is 1.9e-7 inside the vertex of rows 1-3 and nearly dependent on rows 1
+        # and 2; a multiplier on it makes the vertex pass the KKT test with multipliers
+        # near 1e4, although the projection lies 5e-3 away
+        z = np.array([-2.767835, -0.105477, 2.268443])
+        A = np.array([[-0.018279, 0.186721, -0.163899], [-2.25957, 0.403857, 0.5084],
+                      [0.56094, -0.98625, 0.685253], [-0.552181, 0.012463, 0.13444]])
+        b = np.array([-0.083882, -1.237567, 0.664005, -0.294348])
+        for max_iter in (2, 200):
+            reference_solver = DykstraProjectionSolver(z, A, b, max_iter=max_iter)
+            dykstra = reference_solver.solve().projection
+            with self.subTest(max_iter=max_iter):
+                solver = LTIVer5Solver(z, A, b, max_iter=max_iter)
+                result = solver.solve()
+                expected = reference_solver.actual_projection if solver.settled else dykstra
+                np.testing.assert_allclose(result.projection, expected, rtol=0.0, atol=1e-9 * np.abs(z).max())
+
+    def test_ver5_does_not_certify_a_limit_the_kkt_test_rejects(self) -> None:
+        # Row 0 drains by about 1.4e-11 per cycle, below the rounding level of the drifts
+        # at an offset of 1000, so the finality test passes at the corner (1000, 1000);
+        # the projection lies 1e-3 further along row 1, where row 2 meets it
+        offset = np.array([1000.0, 1000.0])
+        A = np.array([[-1.0, 0.0], [0.0, 1.0], [-1.2e-4, -1.0]])
+        b = A @ offset - np.array([0.0, 0.0, 1.2e-7])
+        z = offset + np.array([-1.0, 1.0])
+        atol = 1e-9 * np.abs(z).max()
+        for max_iter in (3, 200):
+            reference_solver = DykstraProjectionSolver(z, A, b, max_iter=max_iter)
+            dykstra = reference_solver.solve().projection
+            with self.subTest(max_iter=max_iter):
+                result = LTIVer5Solver(z, A, b, max_iter=max_iter).solve()
+                if result.certificate == "kkt":
+                    np.testing.assert_allclose(result.projection, reference_solver.actual_projection,
+                                               rtol=0.0, atol=atol)
+                else:
+                    self.assertIsNone(result.settled_at)
+                    np.testing.assert_allclose(result.projection, dykstra, rtol=0.0, atol=atol)
 
 
 if __name__ == "__main__":
