@@ -117,7 +117,9 @@ The reference projection is the `quadprog` QP solution, computed once in the con
 
 `tests/test_visualiser_regressions.py` covers layout scaling past three constraints and CSV round-tripping, including the legacy section names.
 
-Each file inserts `Python/Working Version` into `sys.path` itself, which is why the suite runs from the repository root with `python -m unittest discover -s tests -v` and needs no package, no `conftest.py` and no pytest. `test_visualiser_regressions.py` calls `matplotlib.use("Agg")` before importing pyplot; the solver tests never import pyplot at all.
+`tests/test_lti_solvers.py` covers the LTI solvers and the oracle, and is where their regressions belong, test first. Most tests state the contract rather than an implementation: the same-budget Dykstra iterate or, once settled, the projection, a history equal to Dykstra's up to the settlement, and invariance under scaling the problem and adding coordinates no constraint touches. Most fixes were checked by reverting them and confirming a test fails; the exceptions are guards that no problem in the suite reaches, such as the kernel projection of the deflated solve: no singular episode in the suite is ill-conditioned enough for rounding to move the kernel component measurably. The few tests that count exact cycles or stepped cycles do so because the defect they pin is lost acceleration, not a wrong point.
+
+Each file inserts `Python/Working Version` into `sys.path` itself, which is why the suite runs from the repository root with `python -m unittest discover -s tests -v` and needs no package, no `conftest.py` and no pytest. `test_visualiser_regressions.py` calls `matplotlib.use("Agg")` before importing pyplot; `test_solver_unit.py` and `test_solver_regressions.py` never import pyplot, and `test_lti_solvers.py` imports it only through `visualiser` in its export test, which draws nothing.
 
 ## 9. History and dead ends
 
