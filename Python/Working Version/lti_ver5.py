@@ -122,8 +122,10 @@ class LTIVer5Solver(LTIVer4Solver):
         if np.linalg.cond(IAP) >= 1e12:
             return self._step_episode(start_cycle)
 
-        # Deflated fixed point and the closed-form constants of the episode
-        x_inf = P_1 @ self.x + np.linalg.solve(IAP, self.B_m - P_1 @ self.B_m)
+        # Deflated fixed point and the closed-form constants of the episode; the
+        # solved part lies in the span in exact arithmetic, and keeping only that part
+        # stops rounding from moving the kernel component, which no cycle can undo
+        x_inf = P_1 @ self.x + Q @ (Q.T @ np.linalg.solve(IAP, self.B_m - P_1 @ self.B_m))
         RIA = np.linalg.solve(IAP.T, self.R.T).T
         z_0 = self.x - x_inf
         cf = _CF(A_m=self.A_m, x_inf=x_inf, RIA=RIA,
