@@ -3,6 +3,7 @@ Dykstra cycle in scalar auxiliaries, the cycle map of an episode and its closed-
 constants, the envelope horizon, the frozen-stall crossing, and the KKT certificate."""
 
 from collections import namedtuple
+from itertools import combinations
 import numpy as np
 
 # Rounding allowed, in units of eps times the magnitudes that cancel, before a
@@ -19,6 +20,10 @@ RHO_CAP = 1.0 - 1e-12
 # Rows within this distance of the hint, relative to the magnitudes their slack is
 # computed from, are candidates for the active set of the projection
 _KKT_CANDIDATE_TOL = 1e-7
+
+# Candidate rows up to this many also have every subset tried as a support, since
+# nearly dependent rows leave the choice among them to rounding
+_KKT_EXHAUSTIVE_ROWS = 6
 
 # Error certified for the projection, relative to the step from z and the multiplier
 # terms; the stationarity residual of a feasible, complementary point bounds it
@@ -370,8 +375,9 @@ def kkt_certificate(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray,
 
     # Candidate supports: the rows that bind at the projection onto the polyhedron of
     # the candidate rows alone, by its dual (exact) and by the cone at a common point
-    # of their boundaries (accurate when one exists), then the active set and all
-    # candidate rows as they stand
+    # of their boundaries (accurate when one exists), then the active set, all candidate
+    # rows as they stand, and, when there are at most _KKT_EXHAUSTIVE_ROWS candidate
+    # rows, every subset of them
     supports = []
     if rows.size:
         N = unit_A[rows]
@@ -382,6 +388,9 @@ def kkt_certificate(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray,
         supports.append(rows[cone > 0.0])
     supports.append(np.where(active)[0])
     supports.append(rows)
+    if rows.size <= _KKT_EXHAUSTIVE_ROWS:
+        supports += [np.array(subset) for size in range(1, rows.size + 1)
+                     for subset in combinations(rows, size)]
 
     tried = set()
     for support in supports:
