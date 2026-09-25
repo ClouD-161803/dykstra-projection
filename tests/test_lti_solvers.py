@@ -1199,6 +1199,26 @@ class LTISolverRegressionTests(unittest.TestCase):
         np.testing.assert_allclose(nonnegative_quadratic(np.eye(2), np.array([1e-6, 1e12])),
                                    [1e-6, 1e12], rtol=1e-12, atol=0.0)
 
+    def test_certificate_ignores_a_coordinate_no_row_touches(self) -> None:
+        # Rows 0 and 1 are nearly dependent, so rounding decides which of them the
+        # candidate supports pick; an untouched coordinate of 1e3 changed the pick so that
+        # no candidate passed, and the result did not settle
+        z = np.array([-1.990561334850574, -2.9067387420981095, -0.6337094657361467])
+        A = np.array([[-0.7413093028615715, -0.5990040378817381, 0.3027452395864619],
+                      [-0.741309301802762, -0.599004035928385, 0.302745246043943],
+                      [-0.7244648951747356, -0.65635618337958, -0.21058769242016606]])
+        b = np.array([0.16166133162447816, 0.16166131974679893, 1.4801588469548437])
+        plain = LTIVer5Solver(z, A, b, max_iter=200).solve()
+        self.assertEqual(plain.certificate, "kkt")
+        for extra in (1e3, 1e6, 1e12):
+            with self.subTest(untouched=extra):
+                lifted = LTIVer5Solver(np.append(z, extra), np.hstack([A, np.zeros((3, 1))]), b,
+                                       max_iter=200).solve()
+                self.assertEqual(lifted.certificate, plain.certificate)
+                self.assertEqual(lifted.settled_at, plain.settled_at)
+                np.testing.assert_allclose(lifted.projection[:3], plain.projection, rtol=0.0, atol=1e-12)
+                self.assertEqual(lifted.projection[3], extra)
+
     def test_record_schedule_rejects_an_invalid_budget(self) -> None:
         z, A, b = box_line_problem()
         for max_iter in (-1, 1.5, True):
