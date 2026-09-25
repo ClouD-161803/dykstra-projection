@@ -204,11 +204,11 @@ class LTISolver(ConvexProjectionSolver):
         while start_cycle + t - 1 <= self.max_iter:
             cycle = start_cycle + t - 1
 
-            # Transient z_t = A_m z_{t-1}, auxiliaries y_m and slacks g_j at cycle t
             z_t = cf.A_m @ z_prev
             y_t = active_auxiliaries(cf, t, z_t)
 
-            # Stop just before the cycle on which the active set changes
+            # The cycle that changes the active set is run exactly, so the episode ends
+            # in the state before it
             if not np.array_equal(closed_form_activity(cf, self.cmap, t, y_t, z_t, z_prev), cf.active):
                 self._set_state(cf.x_inf + z_prev, active_auxiliaries(cf, t - 1, z_prev))
                 return _switch(cycle)
@@ -229,7 +229,10 @@ class LTISolver(ConvexProjectionSolver):
     def _jump(self, cf: ClosedForm, t: int, z_t: np.ndarray, cycle: int, rho: float) -> tuple:
         """Jump and verify the landing."""
         k = min(jump_length(cf, t, z_t, rho), self.max_iter - cycle)
-        # Land at z_{t+k} = A_m^k z_t; halve the jump whenever the active set did not hold
+        # The envelope proves every cycle up to the landing switch-free, reading drifts and
+        # slacks within rounding as zero as closed_form_activity does; the landing state is
+        # computed with rounding, so its signs are checked, and a shorter jump stays inside
+        # the proven run
         while k >= 1:
             z_before = np.linalg.matrix_power(cf.A_m, k - 1) @ z_t
             z_after = cf.A_m @ z_before
