@@ -9,9 +9,6 @@ from lti_ver3 import LTIVer3Solver
 # A cycle that moves the state by less than this leaves it frozen
 _MOTION_TOL = 1e-9
 
-# Auxiliary increments delta_m smaller than this count as zero
-_DELTA_TOL = 1e-12
-
 # Motion of the state times jump length allowed while treating the state as frozen
 _MOTION_BUDGET = 1e-9
 
@@ -25,13 +22,14 @@ class LTIVer4Solver(LTIVer3Solver):
         x_next = self.A_m @ x + self.B_m
         return float(np.linalg.norm(x_next - x)) < _MOTION_TOL
 
-    def _stall_crossing(self, y: np.ndarray, delta: np.ndarray, active: np.ndarray) -> float:
+    def _stall_crossing(self, y: np.ndarray, delta: np.ndarray, delta_floor: np.ndarray,
+                        active: np.ndarray) -> float:
         """Cycles until the first crossing."""
         crossing = np.inf
 
         # A draining active auxiliary reaches zero after ceil(y_m / -delta_m) cycles
         for m in np.where(active)[0]:
-            if delta[m] < -_DELTA_TOL and y[m] > 0.0:
+            if delta[m] < -delta_floor[m] and y[m] > 0.0:
                 # A crossing past the budget is never taken, and above 2**53 refining it
                 # one cycle at a time takes about ratio / 2**53 steps, which never
                 # finishes at ratios like 1e30
@@ -48,7 +46,7 @@ class LTIVer4Solver(LTIVer3Solver):
 
         # A positive increment on an inactive half-space reactivates it at once
         for j in np.where(~active)[0]:
-            if delta[j] > _DELTA_TOL:
+            if delta[j] > delta_floor[j]:
                 crossing = min(crossing, 1 if y[j] + delta[j] > 0.0 else 2)
         return crossing
 
@@ -60,14 +58,16 @@ class LTIVer4Solver(LTIVer3Solver):
         y = self.y if y is None else y
         active = np.asarray(self.active if active is None else active)
 
-        # Inactive auxiliaries are zero; every auxiliary moves by delta per cycle
+        # Inactive auxiliaries are zero; every auxiliary moves by delta per cycle,
+        # which is zero only up to rounding
         y = np.where(active, y, 0.0)
         motion = float(np.linalg.norm(self.A_m @ x + self.B_m - x))
         delta = self.R @ x + self.s
+        delta_floor = self._rounding_floor(np.abs(self.R) @ np.abs(x) + self.s_scale)
 
         # No jump when the crossing lies beyond the budget or the motion of the
         # state over the jump would exceed the budget
-        crossing = self._stall_crossing(y, delta, active)
+        crossing = self._stall_crossing(y, delta, delta_floor, active)
         if crossing > self.max_iter - start_cycle + 1:
             return None
         k = int(crossing) - 1
