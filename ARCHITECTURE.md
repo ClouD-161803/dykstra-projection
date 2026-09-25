@@ -65,7 +65,7 @@ The state is the point and one scalar auxiliary per half-space, since Dykstra's 
 
 ## 5. The result object
 
-`solve()` always returns a `ProjectionResult`. `projection` and `path` are always populated; the rest are `None` unless the matching constructor flag was set.
+`solve()` always returns a `ProjectionResult`. `projection` and `path` are always populated; `settled_at` and `certificate` are `None` unless an LTI solver settled, and the rest unless the matching constructor flag was set.
 
 | Field | Flag | Shape |
 |---|---|---|
@@ -76,6 +76,8 @@ The state is the point and one scalar auxiliary per half-space, since Dykstra's 
 | `converged_errors` | `track_error` | `(max_iter + 1,)`, `nan` where not converged |
 | `errors_for_plotting` | `plot_errors` | `(max_iter, constraints, dim)` |
 | `active_half_spaces` | `plot_active_halfspaces` | `(constraints, max_iter + 1)` |
+| `settled_at` | LTI solvers that settle | cycle, or `None` |
+| `certificate` | LTI solvers that settle | `"kkt"`, `"finality"`, or `None` |
 
 Note the transposition: `active_half_spaces` is constraint-major, everything else is cycle-major.
 
@@ -83,13 +85,15 @@ Note the transposition: `active_half_spaces` is constraint-major, everything els
 
 The flags are opt-in because the arrays are the expensive part: `path` and `errors_for_plotting` are both cycles by constraints by dimension.
 
-Use the `has_error_tracking`, `has_error_plotting_data` and `has_active_halfspace_data` predicates at a call site rather than testing a field against `None`.
+Use the `has_error_tracking`, `has_error_plotting_data` and `has_active_halfspace_data` predicates at a call site rather than testing a field against `None`, and `is_settled` for the settlement.
+
+An LTI result is Dykstra's own iterate after `max_iter` cycles, with the same path, errors and corrections cycle for cycle, unless it settled; then it is the limit from `settled_at` on, in the result and in every history row. `active_half_spaces` means something slightly different for the two families: the core solvers test each half-space at the cycle's end point shifted by its own correction, as if it were visited first; the LTI solvers record the set that was active during the cycle.
 
 ## 6. Visualisation and export
 
 Three visualiser classes, not interchangeable. `Visualiser` lays the half-space panels out horizontally. `VerticalVisualiser` subclasses it and puts the activity traces on a lower axis, for problems with more constraints than fit across. `ComparisonVisualiser` is separate, not a subclass, and draws two solvers' results against each other: the shared projection panel, the error comparison, and the activity comparison. `paper_figure.py` uses it.
 
-`ResultExporter.export` writes a sectioned CSV, not a table. The sections, in order: `METADATA` (solver name, iteration count, dimension, constraint count, then any keyword arguments passed through), `INITIAL_POINT`, `FINAL_PROJECTION`, `CONSTRAINTS_A`, `CONSTRAINTS_B`, then `PATH_HISTORY`, `SQUARED_ERRORS`, `STALLED_ERRORS`, `CONVERGED_ERRORS`, `ERRORS_FOR_PLOTTING` and `ACTIVE_HALFSPACES` for whichever tracking was enabled. If `output_path` names a directory, the filename becomes `<solver_name>_<max_iter>_iterations.csv`.
+`ResultExporter.export` writes a sectioned CSV, not a table. The sections, in order: `METADATA` (solver name, iteration count, dimension, constraint count, `settled_at` and `certificate` for a settled result, then any keyword arguments passed through), `INITIAL_POINT`, `FINAL_PROJECTION`, `CONSTRAINTS_A`, `CONSTRAINTS_B`, then `PATH_HISTORY`, `SQUARED_ERRORS`, `STALLED_ERRORS`, `CONVERGED_ERRORS`, `ERRORS_FOR_PLOTTING` and `ACTIVE_HALFSPACES` for whichever tracking was enabled. If `output_path` names a directory, the filename becomes `<solver_name>_<max_iter>_iterations.csv`.
 
 `ResultExporter.load` reads that back and reshapes the flattened path and error blocks to cycle by constraint using `num_constraints` from the metadata. It also accepts the legacy section names `CONSTRAINTS_N` and `CONSTRAINTS_C`, which is what `test_csv_loader_accepts_legacy_constraint_sections` pins: older recorded experiments used them, and they predate the `A @ x <= b` naming.
 
