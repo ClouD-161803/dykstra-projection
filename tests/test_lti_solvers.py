@@ -564,6 +564,35 @@ class LTISolverRegressionTests(unittest.TestCase):
                         np.testing.assert_allclose(result.projection, solver.actual_projection,
                                                    rtol=0.0, atol=1e-8 * np.abs(z).max())
 
+    def test_ver5_certificate_exits_crawls_and_degenerate_limits(self) -> None:
+        # Near-parallel wedges crawl for about 1 / theta**2 cycles, an equality written as
+        # two half-spaces leaves an inactive row exactly tight, and a feasible z is its own
+        # projection; the KKT test settles each without running the crawl
+        cases = {
+            "equality pair": (np.array([2.0, 1.0]),
+                              np.array([[1.0, 1.0], [-1.0, -1.0], [1.0, 0.0]]),
+                              np.array([1.0, -1.0, 0.2])),
+            "feasible start": (np.array([0.1, 0.1]), np.eye(2), np.ones(2)),
+        }
+        for theta in (1e-3, 1e-5, 1e-6):
+            cases[f"wedge of half-angle {theta:g}"] = (
+                np.array([-1.0, 0.3, 0.7, 0.5]),
+                np.array([[-np.sin(theta), np.cos(theta), 0.0, 0.0],
+                          [-np.sin(theta), -np.cos(theta), 0.0, 0.0]]),
+                np.zeros(2),
+            )
+
+        for case_name, (z, A, b) in cases.items():
+            with self.subTest(case=case_name):
+                solver = LTIVer5Solver(z, A, b, max_iter=200, plot_errors=True)
+                result = solver.solve()
+                self.assertTrue(solver.settled)
+                np.testing.assert_allclose(result.projection, solver.actual_projection,
+                                           rtol=0.0, atol=1e-9)
+                # The multipliers written back as corrections reproduce z
+                np.testing.assert_allclose(result.projection + result.errors_for_plotting[-1].sum(axis=0),
+                                           z, rtol=0.0, atol=1e-9)
+
     def test_stall_jump_does_not_skip_a_small_reactivation(self) -> None:
         # Rows 1 and 3 hold the state at x = 0.5 * scale while row 1 drains; row 0 is
         # violated there by only 5e-13, and Dykstra reactivates it on cycle 2
@@ -658,6 +687,28 @@ class LTISolverRegressionTests(unittest.TestCase):
                 result = solver.solve()
                 expected = reference_solver.actual_projection if solver.settled else dykstra
                 np.testing.assert_allclose(result.projection, expected, rtol=0.0, atol=1e-9 * np.abs(z).max())
+
+    def test_ver5_certifies_a_crawl_whose_limit_dormant_rows_cut_off(self) -> None:
+        # Rows 0 and 1 form a wedge 0.02 rad wide that Dykstra crawls along towards the
+        # origin; rows 2 and 3 both cut the origin off but stay inactive for thousands of
+        # cycles, and only row 2 binds at the projection, so neither the active set nor
+        # every candidate row is its support
+        theta = 1e-2
+        z = np.array([-1.0, 0.3, 0.0])
+        A = np.array([[-np.sin(theta), np.cos(theta), 0.0],
+                      [-np.sin(theta), -np.cos(theta), 0.0],
+                      [1.0, 0.0, 1.0],
+                      [1.0, 0.0, 2.0]])
+        b = np.array([0.0, 0.0, -0.3, -0.1])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=200).solve().projection
+        solver = LTIVer5Solver(z, A, b, max_iter=200, plot_errors=True)
+        result = solver.solve()
+        self.assertGreater(np.abs(dykstra - solver.actual_projection).max(), 0.5)
+        self.assertTrue(solver.settled)
+        self.assertEqual(result.certificate, "kkt")
+        np.testing.assert_allclose(result.projection, solver.actual_projection, rtol=0.0, atol=1e-9)
+        np.testing.assert_allclose(result.projection + result.errors_for_plotting[-1].sum(axis=0),
+                                   z, rtol=0.0, atol=1e-9)
 
     def test_ver5_does_not_certify_a_limit_the_kkt_test_rejects(self) -> None:
         # Row 0 drains by about 1.4e-11 per cycle, below the rounding level of the drifts
