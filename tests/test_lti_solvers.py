@@ -268,6 +268,38 @@ class LTISolverRegressionTests(unittest.TestCase):
                     np.testing.assert_allclose(result.projection, qp_reference,
                                                rtol=1e-13, atol=1e-7 * length)
 
+    def test_frozen_stall_test_is_invariant_under_scaling_the_problem(self) -> None:
+        # At scale 1e-9 cycle 2 of the first problem moves the state by 0.25 * scale,
+        # which is not a frozen stall however small it is in absolute terms
+        cases = {
+            "moving wedge": (
+                np.array([1.0, 0.0, 0.0]),
+                np.array([[1.0, 1.0, 0.0], [1.0, 0.0, 0.0]]),
+                np.zeros(2),
+            ),
+            "rank-deficient episodes": (
+                np.array([-2.5773951085302205, -4.631028893964539, 0.7036526127117877]),
+                np.array([[1.903719540005617, 2.1684157123550465, 0.7132322831037413],
+                          [0.504002187870548, 0.24362088066698953, -0.2981776943387448],
+                          [-0.4672237847253826, -0.22584320592790263, 0.27641886131141086],
+                          [-1.9996431856170793, -1.3159613447991658, 0.4179761229367063]]),
+                np.array([-2.5984110466213823, 0.23570619892985528, 0.8680844100049375,
+                          2.1886709836203315]),
+            ),
+        }
+
+        for case_name, (z, A, b) in cases.items():
+            for scale in (1.0, 1e-9):
+                for max_iter in (3, 20, 300):
+                    reference_solver = DykstraProjectionSolver(scale * z, A, scale * b, max_iter=max_iter)
+                    dykstra = reference_solver.solve().projection
+                    with self.subTest(case=case_name, scale=scale, max_iter=max_iter):
+                        solver = LTIVer4Solver(scale * z, A, scale * b, max_iter=max_iter)
+                        result = solver.solve()
+                        np.testing.assert_allclose(result.projection / scale,
+                                                   expected_result(result, solver, dykstra) / scale,
+                                                   rtol=0.0, atol=1e-10)
+
     def test_nearly_parallel_rank_deficient_episode_stays_on_the_dykstra_path(self) -> None:
         # Rows 1 and 2 are about 6.5e-6 rad apart, so I - A_m + P_1 has condition about
         # 7e10, where a deflated closed form with an explicit inverse once left the path
