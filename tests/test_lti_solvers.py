@@ -88,6 +88,44 @@ class LTISolverRegressionTests(unittest.TestCase):
                     np.testing.assert_allclose(result.projection, qp_reference, atol=1e-7)
                     self.assertTrue(np.all(A @ result.projection <= b + 1e-8))
 
+    def test_seeded_problems_return_the_iterate_or_the_projection(self) -> None:
+        # Every version returns Dykstra's own iterate at the same budget, or, once it
+        # settles, the projection; a limit proven only final carries the cycle map's
+        # rounding, up to about cond(I - A_m) * eps with cond below the cutoff
+        rng = np.random.default_rng(20260923)
+        for trial in range(30):
+            p, n = int(rng.integers(2, 6)), int(rng.integers(1, 9))
+            A = rng.normal(size=(n, p))
+            if trial % 3 == 1 and n >= 2:
+                A[1] = A[0] + 1e-4 * rng.normal(size=p)
+            x0 = rng.normal(size=p)
+            b = A @ x0 + rng.uniform(0.0, 1.0, size=n)
+            if trial % 3 == 2 and n >= 2:
+                A[1], b[0] = -A[0], A[0] @ x0
+                b[1] = -b[0]
+            z = x0 + 3.0 * rng.normal(size=p)
+            if trial % 5 == 4:
+                z, A = np.append(z, 1e7), np.hstack([A, np.zeros((n, 1))])
+            touched = np.any(A != 0.0, axis=0)
+            scale = np.abs(z[touched]).max()
+
+            reference_solver = DykstraProjectionSolver(z, A, b, max_iter=300)
+            dykstra = reference_solver.solve().projection
+            for solver_type in LTI_SOLVERS:
+                with self.subTest(trial=trial, solver=solver_type.__name__):
+                    result = solver_type(z, A, b, max_iter=300, track_error=True).solve()
+                    if result.certificate == "kkt":
+                        expected, atol = reference_solver.actual_projection, 1e-9 * scale
+                    elif result.certificate == "finality":
+                        expected, atol = reference_solver.actual_projection, 1e-7 * scale
+                    else:
+                        expected, atol = dykstra, 1e-9 * scale
+                    np.testing.assert_allclose(result.projection[touched], expected[touched],
+                                               rtol=0.0, atol=atol)
+                    np.testing.assert_array_equal(result.projection[~touched], z[~touched])
+                    np.testing.assert_allclose(result.path[-1, -1], result.projection, rtol=0.0,
+                                               atol=1e-12 * scale)
+
     def test_zero_iterations_returns_the_initial_point_for_every_version(self) -> None:
         z = np.array([2.0, 0.0])
         A = np.array([[1.0, 0.0]])
