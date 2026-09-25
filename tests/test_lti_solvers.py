@@ -348,6 +348,21 @@ class LTISolverRegressionTests(unittest.TestCase):
                 result = solver.solve()
                 np.testing.assert_allclose(result.projection, solver.actual_projection, rtol=0.0, atol=1e-10)
 
+    def test_every_cycle_is_recorded_without_constraints(self) -> None:
+        z = np.array([1.0, 2.0])
+        A, b = np.empty((0, 2)), np.empty(0)
+        for min_error in (1e-3, 0.0):
+            reference = DykstraProjectionSolver(z, A, b, max_iter=5, track_error=True,
+                                                min_error=min_error).solve()
+            for solver_type in LTI_SOLVERS:
+                with self.subTest(solver=solver_type.__name__, min_error=min_error):
+                    result = solver_type(z, A, b, max_iter=5, track_error=True,
+                                         min_error=min_error).solve()
+                    np.testing.assert_array_equal(result.projection, z)
+                    np.testing.assert_array_equal(result.squared_errors, reference.squared_errors)
+                    np.testing.assert_array_equal(result.converged_errors, reference.converged_errors)
+                    np.testing.assert_array_equal(result.stalled_errors, reference.stalled_errors)
+
     def test_settlement_is_reported_and_recorded_from_its_cycle(self) -> None:
         # Dykstra reaches (-0.25, 0.25) in two cycles and the projection (0, 0) only in
         # the limit; Ver2-4 prove the active set final on cycle 2, and Ver5 certifies the
