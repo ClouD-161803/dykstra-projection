@@ -250,16 +250,22 @@ def jump_length(cf: ClosedForm, t: int, z_t: np.ndarray, rho: float) -> int:
     """Switch-free jump length."""
     z_norm = float(np.linalg.norm(z_t))
 
-    # No jump while an inactive slack g_j could reach zero within its envelope
+    # No jump while an inactive slack g_j could rise above the rounding its
+    # prediction ignores within its envelope
     for j in np.where(cf.inactive)[0]:
-        if cf.row_R[j] * z_norm >= -cf.beta[j]:
+        if cf.beta[j] + cf.row_R[j] * z_norm > cf.beta_floor[j]:
             return 0
 
-    # Every active y_m stays positive up to the smallest envelope horizon
+    # Every active y_m stays above minus the rounding its extrapolation carries, as in
+    # closed_form_activity, up to the smallest envelope horizon; a drift within rounding
+    # is no drain, as in the finality test, whatever its sign, and the level keeps the
+    # drift itself so that the floor, which grows at least as fast, covers it
+    floor = auxiliary_floor(cf, t)
     k = np.inf
     for m in np.where(cf.active)[0]:
-        k = min(k, rigorous_deactivation_horizon(
-            cf.G[m] + t * cf.beta[m], cf.beta[m], cf.row_RIA[m] * z_norm, rho))
+        beta = 0.0 if abs(cf.beta[m]) <= cf.beta_floor[m] else cf.beta[m]
+        k = min(k, rigorous_deactivation_horizon(cf.G[m] + floor[m] + t * cf.beta[m], beta,
+                                                 cf.row_RIA[m] * z_norm, rho))
     if not np.isfinite(k):
         return 0
 
