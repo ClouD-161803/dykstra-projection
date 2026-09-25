@@ -1,7 +1,9 @@
 """Regression coverage for the LTI Dykstra experiment family."""
 
 from pathlib import Path
+import signal
 import sys
+import threading
 import unittest
 
 import numpy as np
@@ -117,6 +119,59 @@ class LTISolverRegressionTests(unittest.TestCase):
         self.assertLessEqual(sum(cycles for _, cycles in schedule), 200)
         np.testing.assert_allclose(recorded.projection, reference, atol=1e-7)
         np.testing.assert_allclose(replayed.projection, reference, atol=1e-7)
+
+    def test_frozen_drain_far_past_the_budget_returns_promptly(self) -> None:
+        # In the three-planes case the draining auxiliary would cross about 2.5e30 cycles
+        # out, where refining the crossing one cycle at a time never terminates; the
+        # narrow wedge reached the same loop through Ver5 until Ver5 certified it at entry
+        if not hasattr(signal, "setitimer") or threading.current_thread() is not threading.main_thread():
+            self.skipTest("the hang guard needs SIGALRM on the main thread")
+
+        def unit(degrees: float) -> np.ndarray:
+            return np.array([np.cos(np.radians(degrees)), np.sin(np.radians(degrees)), 0.0])
+
+        cases = {
+            "far point, three planes": (
+                np.array([-1e30, 1.0, 0.0]),
+                np.array([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [-0.5, -1.0, 0.0]]),
+                np.array([0.0, 0.0, -1.0]),
+            ),
+            "far point, narrow wedge": (
+                1e25 * np.array([-3.0, -2.6, 0.0]),
+                np.array([unit(70.0), -unit(68.0), -unit(68.0)]),
+                np.array([-0.3, 0.6, -0.6]),
+            ),
+        }
+
+        def on_alarm(signum, frame):
+            raise TimeoutError("solve() did not return within 2 s")
+
+        previous = signal.signal(signal.SIGALRM, on_alarm)
+        previous_timer = signal.getitimer(signal.ITIMER_REAL)
+        try:
+            for case_name, (z, A, b) in cases.items():
+                dykstra = DykstraProjectionSolver(z, A, b, max_iter=2).solve().projection
+                scale = float(np.abs(dykstra).max())
+                for solver_type in LTI_SOLVERS:
+                    with self.subTest(case=case_name, solver=solver_type.__name__):
+                        signal.setitimer(signal.ITIMER_REAL, 2.0)
+                        try:
+                            solver = solver_type(z, A, b, max_iter=2)
+                            result = solver.solve()
+                        except TimeoutError as error:
+                            self.fail(str(error))
+                        finally:
+                            signal.setitimer(signal.ITIMER_REAL, 0.0)
+                        # The QP reference is unusable at this magnitude, so a settled
+                        # point is checked for feasibility, to within 1e-9 of its step
+                        if result.is_settled():
+                            step = np.linalg.norm(z - result.projection)
+                            self.assertTrue(np.all(A @ result.projection - b <= 1e-9 * step))
+                        else:
+                            np.testing.assert_allclose(result.projection, dykstra, rtol=1e-9, atol=1e-9 * scale)
+        finally:
+            signal.signal(signal.SIGALRM, previous)
+            signal.setitimer(signal.ITIMER_REAL, *previous_timer)
 
     def test_finality_is_invariant_under_scaling_the_problem(self) -> None:
         # Scaling z and b by c scales every iterate and auxiliary by c, so a draining
