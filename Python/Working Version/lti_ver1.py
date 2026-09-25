@@ -10,6 +10,12 @@ from projection_result import ProjectionResult
 class LTIVer1Solver(ConvexProjectionSolver):
     """Dykstra via its cycle map."""
 
+    def __init__(self, *args, **kwargs) -> None:
+        """Solver without a settlement yet."""
+        super().__init__(*args, **kwargs)
+        self.settled_at = None
+        self.certificate = None
+
     def _update_error(self, m: int, x_temp: np.ndarray, x: np.ndarray, index: int) -> None:
         """Dykstra's auxiliary update."""
         self.e[m] = self.e[index] + (x_temp - x)
@@ -150,5 +156,7 @@ class LTIVer1Solver(ConvexProjectionSolver):
             stalled_errors=self.stalled_errors if self.track_error else None,
             converged_errors=self.converged_errors if self.track_error else None,
             errors_for_plotting=self.errors_for_plotting if self.plot_errors else None,
-            active_half_spaces=self.active_half_spaces if self.plot_active_halfspaces else None
+            active_half_spaces=self.active_half_spaces if self.plot_active_halfspaces else None,
+            settled_at=self.settled_at,
+            certificate=self.certificate
         )

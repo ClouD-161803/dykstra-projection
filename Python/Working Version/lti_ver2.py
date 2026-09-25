@@ -65,8 +65,11 @@ class LTIVer2Solver(LTIVer1Solver):
 
     def _settle_at_fixed_point(self, cf: _CF, cycle: int, t: int) -> None:
         """Jump to the fixed point."""
+        # The limit replaces the state from the settling cycle itself, whose record
+        # then agrees with the result even when it is the last cycle
         self._set_state(cf.x_inf, cf.G + t * cf.beta, cf.active)
-        for later_cycle in range(cycle + 1, self.max_iter + 1):
+        self.settled_at, self.certificate = cycle, "finality"
+        for later_cycle in range(cycle, self.max_iter + 1):
             self._record_cycle(later_cycle, cf.active)
 
     def _closed_form_episode(self, start_cycle: int, IA_inv: np.ndarray) -> int | None:

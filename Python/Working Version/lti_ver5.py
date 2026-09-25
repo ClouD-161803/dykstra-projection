@@ -84,6 +84,7 @@ class LTIVer5Solver(LTIVer4Solver):
         active = multipliers > 0.0
         self._set_state(candidate, multipliers, active)
         self.settled = True
+        self.settled_at, self.certificate = start_cycle, "kkt"
         for cycle in range(start_cycle, self.max_iter + 1):
             self._record_cycle(cycle, tuple(active))
         return True

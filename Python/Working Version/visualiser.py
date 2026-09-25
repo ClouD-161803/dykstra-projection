@@ -44,6 +44,10 @@ class ResultExporter:
             writer.writerow(['dimensions', len(initial_point)])
             writer.writerow(['num_constraints', A.shape[0]])
             
+            if result.is_settled():
+                writer.writerow(['settled_at', result.settled_at])
+                writer.writerow(['certificate', result.certificate])
+
             for key, value in kwargs.items():
                 writer.writerow([key, value])
             
