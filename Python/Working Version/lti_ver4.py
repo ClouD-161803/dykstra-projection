@@ -31,7 +31,14 @@ class LTIVer4Solver(LTIVer3Solver):
         # A draining active auxiliary reaches zero after ceil(y_m / -delta_m) cycles
         for m in np.where(active)[0]:
             if delta[m] < -_DELTA_TOL and y[m] > 0.0:
-                k = int(np.floor(y[m] / (-delta[m])))
+                # A crossing past the budget is never taken, and above 2**53 refining it
+                # one cycle at a time takes about ratio / 2**53 steps, which never
+                # finishes at ratios like 1e30
+                ratio = y[m] / (-delta[m])
+                if not ratio <= self.max_iter + 1:
+                    crossing = min(crossing, ratio)
+                    continue
+                k = int(np.floor(ratio))
                 while y[m] + k * delta[m] > 0.0:
                     k += 1
                 while k > 1 and y[m] + (k - 1) * delta[m] <= 0.0:
