@@ -35,6 +35,14 @@ def expected_result(result, solver, dykstra_iterate: np.ndarray) -> np.ndarray:
     return solver.actual_projection if result.is_settled() else dykstra_iterate
 
 
+def spy_exact_cycles(solver) -> list:
+    """Cycles the solver runs as exact Dykstra cycles."""
+    cycles = []
+    run_exact_cycle = solver._dykstra_cycle
+    solver._dykstra_cycle = lambda cycle: (cycles.append(cycle), run_exact_cycle(cycle))[1]
+    return cycles
+
+
 def box_line_problem() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return a 2-D problem whose active set changes during projection."""
     z = np.array([-2.0, 1.4])
@@ -481,6 +489,28 @@ class LTISolverRegressionTests(unittest.TestCase):
                 else:
                     self.assertNotIn("settled_at", metadata)
 
+    def test_equality_pair_does_not_force_an_exact_cycle_every_cycle(self) -> None:
+        # Rows 2 and 3 are one equality written as two half-spaces; rounding leaves the
+        # idle member a slack of a few ulps above zero, which once predicted a switch
+        # on every cycle although Dykstra's active set changes once in 300 cycles
+        z = np.array([2.4007125994569645, -7.7558065657026365])
+        A = np.array([[-0.6178466870477588, -0.4973069762069178],
+                      [0.32830760276717613, 1.6568144692019835],
+                      [0.2117931803349737, -1.979476762616457],
+                      [-0.3626095681006677, 3.389047809860636],
+                      [-1.0189481378840013, -1.3299508294844882]])
+        b = np.array([-0.24332332165456616, 3.2900231051990105, -2.330544570041443,
+                      3.990108456964962, -1.6600198362466738])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=300).solve().projection
+        for solver_type in LTI_SOLVERS:
+            with self.subTest(solver=solver_type.__name__):
+                solver = solver_type(z, A, b, max_iter=300)
+                exact_cycles = spy_exact_cycles(solver)
+                result = solver.solve()
+                self.assertLessEqual(len(exact_cycles), 5)
+                np.testing.assert_allclose(result.projection, expected_result(result, solver, dykstra),
+                                           rtol=0.0, atol=1e-12)
+
     def test_frozen_stall_is_fast_forwarded_whatever_the_budget(self) -> None:
         # The first state stays frozen while an auxiliary drains towards a crossing about
         # 2e6 cycles away, past the budget; the second freezes only after a few stepped
@@ -771,6 +801,68 @@ class LTISolverRegressionTests(unittest.TestCase):
                 else:
                     self.assertIsNone(result.settled_at)
                     np.testing.assert_allclose(result.projection, dykstra, rtol=0.0, atol=atol)
+
+    def test_active_idle_member_of_an_equality_does_not_force_exact_cycles(self) -> None:
+        # Dykstra leaves the idle member of the equality active with an auxiliary of a
+        # few ulps, whose one-cycle prediction rounding can push to or below zero; only a
+        # value beyond rounding may deactivate it
+        z, A, b = np.array([3.7, 0.6]), np.array([[1.4, 0.9], [-1.4, -0.9]]), np.array([0.6, -0.6])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=300).solve().projection
+        for solver_type in (LTIVer1Solver, LTIVer2Solver, LTIVer3Solver):
+            with self.subTest(solver=solver_type.__name__):
+                solver = solver_type(z, A, b, max_iter=300)
+                exact_cycles = spy_exact_cycles(solver)
+                result = solver.solve()
+                self.assertEqual(len(exact_cycles), 1)
+                np.testing.assert_allclose(result.projection, expected_result(result, solver, dykstra),
+                                           rtol=0.0, atol=1e-12)
+
+    def test_idle_member_of_an_equality_does_not_end_a_closed_form_episode(self) -> None:
+        # Rows 1 and 2 are one equality and, with row 0, span the plane, so the episode
+        # runs in closed form; the idle member's slack of a few ulps once predicted a
+        # switch on every cycle, so the active set was never proven final
+        z = np.array([2.7, 8.1])
+        A = np.array([[1.0, 1.2], [-2.0, -2.9], [2.0, 2.9]])
+        b = np.array([-1.7, 1.9, -1.9])
+        for solver_type in (LTIVer2Solver, LTIVer3Solver, LTIVer4Solver):
+            with self.subTest(solver=solver_type.__name__):
+                solver = solver_type(z, A, b, max_iter=100, track_error=True)
+                exact_cycles = spy_exact_cycles(solver)
+                result = solver.solve()
+                self.assertLessEqual(len(exact_cycles), 5)
+                self.assertEqual(result.certificate, "finality")
+                np.testing.assert_allclose(result.projection, solver.actual_projection,
+                                           rtol=0.0, atol=1e-9)
+
+    def test_idle_member_of_an_equality_does_not_end_a_modal_scan(self) -> None:
+        # Rows 2 and 3 are one equality; the active normals lie in the first two
+        # coordinates, so Ver5 scans the episode in its deflated modal form, where the
+        # idle member's slack of a few ulps once predicted a switch on every cycle
+        z = np.array([-1.3, -2.0, 0.0])
+        A = np.array([[-0.9, -0.5, 0.0], [0.2, -1.9, 0.0], [-0.4, 1.7, 0.0], [0.4, -1.7, 0.0]])
+        b = np.array([0.5, 2.1, -2.1, 2.1])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=20).solve().projection
+        solver = LTIVer5Solver(z, A, b, max_iter=20)
+        exact_cycles = spy_exact_cycles(solver)
+        result = solver.solve()
+        self.assertLessEqual(len(exact_cycles), 5)
+        np.testing.assert_allclose(result.projection, expected_result(result, solver, dykstra),
+                                   rtol=0.0, atol=1e-12)
+
+    def test_exactly_tight_idle_member_of_an_equality_pair_allows_finality(self) -> None:
+        # Rows 0 and 1 are the equality x = 0, whose idle member ends exactly tight; it
+        # reactivates only on a slack above rounding, so the active set is final on cycle 2
+        z, A, b = np.array([2.0, 1.0]), np.array([[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0]]), np.zeros(3)
+        max_iter = 50
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=max_iter, track_error=True).solve()
+        for solver_type in (LTIVer2Solver, LTIVer3Solver, LTIVer4Solver):
+            with self.subTest(solver=solver_type.__name__):
+                result = solver_type(z, A, b, max_iter=max_iter, track_error=True).solve()
+                self.assertEqual(result.certificate, "finality")
+                self.assertEqual(result.settled_at, 2)
+                np.testing.assert_allclose(result.projection, [0.0, 0.0], rtol=0.0, atol=1e-15)
+                np.testing.assert_allclose(result.path[:2], dykstra.path[:2], rtol=0.0, atol=1e-15)
+                np.testing.assert_allclose(result.path[2:, -1], 0.0, rtol=0.0, atol=1e-15)
 
 
 if __name__ == "__main__":
