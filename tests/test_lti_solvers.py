@@ -14,6 +14,7 @@ WORKING_VERSION = Path(__file__).resolve().parents[1] / "Python" / "Working Vers
 sys.path.insert(0, str(WORKING_VERSION))
 
 from convex_projection_solver import DykstraProjectionSolver
+from lti_numerics import nonnegative_least_squares, nonnegative_quadratic
 import lti_solver
 from lti_solver import LTIVer1Solver, LTIVer2Solver, LTIVer3Solver, LTIVer4Solver, LTIVer5Solver
 from oracle import oracle_lti_projection, record_schedule
@@ -1182,6 +1183,21 @@ class LTISolverRegressionTests(unittest.TestCase):
             result = solver.solve()
         np.testing.assert_allclose(result.errors_for_plotting, dykstra.errors_for_plotting,
                                    rtol=0.0, atol=1e-13)
+
+    def test_nonnegative_least_squares_ignores_a_coordinate_no_column_touches(self) -> None:
+        # A zero row of C is a coordinate no normal touches; a noise threshold scaled by
+        # the largest entry of d let it hide a small positive gradient
+        C = np.array([[1.0], [0.0]])
+        for untouched in (0.0, 1e12):
+            with self.subTest(untouched=untouched):
+                np.testing.assert_allclose(nonnegative_least_squares(C, np.array([1e-6, untouched])),
+                                           [1e-6], rtol=1e-12, atol=0.0)
+
+    def test_nonnegative_quadratic_keeps_a_small_positive_gradient_beside_a_large_one(self) -> None:
+        # A noise threshold scaled by the largest entry of c let it hide a small positive
+        # gradient
+        np.testing.assert_allclose(nonnegative_quadratic(np.eye(2), np.array([1e-6, 1e12])),
+                                   [1e-6, 1e12], rtol=1e-12, atol=0.0)
 
     def test_record_schedule_rejects_an_invalid_budget(self) -> None:
         z, A, b = box_line_problem()
