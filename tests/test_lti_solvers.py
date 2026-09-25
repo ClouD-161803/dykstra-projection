@@ -511,6 +511,30 @@ class LTISolverRegressionTests(unittest.TestCase):
                 np.testing.assert_allclose(result.projection, expected_result(result, solver, dykstra),
                                            rtol=0.0, atol=1e-12)
 
+    def test_slow_drains_are_jumped_rather_than_scanned(self) -> None:
+        # Both episodes drain an active auxiliary with no transient left to wait for: one
+        # crosses about 5e7 cycles out, past the envelope's bracketing cap, and in the
+        # other the active normals are e_1, e_2 and e_1 again, so A_m = 0 and rho = 0
+        angles = np.deg2rad([80.0, 90.0, 100.0])
+        cases = {
+            "far crossing": (np.array([0.0, 10.0]), np.column_stack([np.cos(angles), np.sin(angles)]),
+                             np.array([0.0, -1e-7, 0.0])),
+            "orthogonal normals": (np.ones(2), np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0]]),
+                                   np.array([0.0, 0.0, -1e-5])),
+        }
+        for case_name, (z, A, b) in cases.items():
+            dykstra = DykstraProjectionSolver(z, A, b, max_iter=2000).solve().projection
+            for solver_type in (LTIVer3Solver, LTIVer4Solver):
+                with self.subTest(case=case_name, solver=solver_type.__name__):
+                    solver = solver_type(z, A, b, max_iter=2000)
+                    jumps = []
+                    jump = solver._jump
+                    solver._jump = lambda *args: (lambda result: (jumps.append(result[0]), result)[1])(jump(*args))
+                    result = solver.solve()
+                    np.testing.assert_allclose(result.projection, expected_result(result, solver, dykstra),
+                                               rtol=0.0, atol=1e-12)
+                    self.assertGreater(max(jumps, default=0), 1000)
+
     def test_frozen_stall_is_fast_forwarded_whatever_the_budget(self) -> None:
         # The first state stays frozen while an auxiliary drains towards a crossing about
         # 2e6 cycles away, past the budget; the second freezes only after a few stepped
