@@ -1234,6 +1234,19 @@ class LTISolverRegressionTests(unittest.TestCase):
                 np.testing.assert_allclose(lifted.projection[:3], plain.projection, rtol=0.0, atol=1e-12)
                 self.assertEqual(lifted.projection[3], extra)
 
+    def test_certificate_keeps_a_coordinate_the_support_does_not_touch(self) -> None:
+        # Rows 0 and 4 bind at the projection and neither touches the first coordinate;
+        # least squares left 9e-16 of the step there, where the residual allowance is
+        # only rounding-sized, so the true support failed the KKT test
+        z = np.array([0.0, -6.0, -3.0])
+        A = np.array([[0.0, -1.5, 1.0], [0.0, 0.0, -0.75], [-0.75, 1.5, 0.0],
+                      [-1.25, 1.0, 0.0], [0.0, 0.25, -1.75], [0.75, -1.75, 1.0]])
+        b = np.array([1.25, 0.5, -0.5, 1.0, 0.375, 1.875])
+        solver = LTIVer5Solver(z, A, b, max_iter=400)
+        result = solver.solve()
+        self.assertEqual(result.certificate, "kkt")
+        np.testing.assert_allclose(result.projection, solver.actual_projection, rtol=0.0, atol=1e-12)
+
     def test_record_schedule_rejects_an_invalid_budget(self) -> None:
         z, A, b = box_line_problem()
         for max_iter in (-1, 1.5, True):
