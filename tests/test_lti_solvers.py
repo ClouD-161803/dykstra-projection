@@ -1000,6 +1000,69 @@ class LTISolverRegressionTests(unittest.TestCase):
                                            rtol=0.0, atol=1e-12)
                 self.assertGreater(max(jumps, default=0), 100)
 
+    def test_idle_member_at_a_vertex_through_the_origin_is_not_deactivated_on_noise(self) -> None:
+        # With every row through the origin the drifts and their floors vanish, and the
+        # idle member's row of RIA is a cancellation, so a level floor built from that row
+        # was the rounding of the noise rather than the noise; moved off the origin, the
+        # same problems run one exact cycle
+        cases = {
+            "duplicate": (np.array([0.9017661911409092, 1.3110149828848165]),
+                          np.array([[0.5780656108147912, 0.8159902876832066],
+                                    [0.5780656108147912, 0.8159902876832066],
+                                    [0.5575424929611688, 0.8301484015178522]]), 1000, 400, (1.0, 1e-9, 1e6)),
+            "equality pair": (np.array([-1.0381166389791687, 1.2593263019012924]),
+                              np.array([[-0.6303172496154348, 0.7763376616120293],
+                                        [0.6303172496154348, -0.7763376616120293],
+                                        [-0.6400547417711724, 0.7683293093044401]]), 3000, 2400, (1.0, 1e-9)),
+        }
+        for case_name, (z, A, max_iter, settle_by, scales) in cases.items():
+            for scale in scales:
+                for solver_type in (LTIVer2Solver, LTIVer3Solver, LTIVer4Solver):
+                    with self.subTest(case=case_name, scale=scale, solver=solver_type.__name__):
+                        solver = solver_type(scale * z, A, np.zeros(3), max_iter=max_iter)
+                        exact_cycles = spy_exact_cycles(solver)
+                        result = solver.solve()
+                        self.assertEqual(len(exact_cycles), 1)
+                        self.assertEqual(result.certificate, "finality")
+                        self.assertLessEqual(result.settled_at, settle_by)
+
+    def test_ill_conditioned_block_does_not_hide_a_real_drain(self) -> None:
+        # A thin wedge through the origin makes I - A_m ill-conditioned while row 0, which
+        # it does not involve, drains to zero on cycle 12; a level floor charged with the
+        # whole resolvent's rounding held that row active off Dykstra's path, and with a
+        # nearly duplicated pair it did the same to row 2 and let finality settle 6e-8 off
+        cases = {
+            "thin wedge": (
+                np.array([0.26984351650509586, -1.4366453736355975, 0.25950342040602364, 0.21422493274409748]),
+                np.array([[-0.2073120487580305, -0.1958121659527864, 0.9493500673935036, 0.13196120507397943],
+                          [0.08474482568145772, -0.6752056101951245, 0.48256125588809434, -0.5514075922554516],
+                          [0.9141484353953053, -0.09784521883790455, 0.1277233718402362, 0.3720829094444397],
+                          [-0.9142028332292307, 0.09770270827402598, -0.12778075857584764, -0.37196698542928425],
+                          [0.34615403649136633, 0.03248784124077808, 0.20933182329889094, -0.9139486369302212]]),
+                np.array([0.0, 0.0, 0.0, 0.0, -0.2]), 400),
+            "nearly duplicated pair": (
+                np.array([-0.7575439440974466, -0.17010854356792335, 0.652818943003556, -0.9854022446910778]),
+                np.array([[-0.434131282186045, 0.6149661475602041, 0.40534803154115945, -0.5186903127186483],
+                          [-0.4340797240261004, 0.614974558111638, 0.4052815292110153, -0.5187754505999692],
+                          [-0.7876195088414867, -0.3721017896274451, -0.468309255220899, -0.14792636317707175],
+                          [-0.3234127406690117, -0.7850747283444561, 0.24747086462741827, -0.46671194675987815]]),
+                np.zeros(4), 200),
+        }
+        for case_name, (z, A, b, max_iter) in cases.items():
+            dykstra = DykstraProjectionSolver(z, A, b, max_iter=max_iter, plot_errors=True).solve()
+            for solver_type in (LTIVer2Solver, LTIVer3Solver, LTIVer4Solver, LTIVer5Solver):
+                with self.subTest(case=case_name, solver=solver_type.__name__):
+                    solver = solver_type(z, A, b, max_iter=max_iter, plot_errors=True)
+                    with mock.patch.object(lti_solver, "kkt_certificate", return_value=None):
+                        result = solver.solve()
+                    end = result.settled_at if result.is_settled() else max_iter + 1
+                    np.testing.assert_allclose(result.path[:end], dykstra.path[:end], rtol=0.0, atol=1e-11)
+                    np.testing.assert_allclose(result.errors_for_plotting[:end - 1],
+                                               dykstra.errors_for_plotting[:end - 1], rtol=0.0, atol=1e-11)
+                    if result.certificate == "finality":
+                        np.testing.assert_allclose(result.projection, solver.actual_projection,
+                                                   rtol=0.0, atol=1e-12)
+
     def test_stall_jump_leaves_a_drained_auxiliary_to_the_exact_cycle(self) -> None:
         # Row 0's auxiliary drains to exactly 0 on cycle 65 with the state frozen; Dykstra
         # drops the row there, but the stepped prediction keeps it active at zero, and a
