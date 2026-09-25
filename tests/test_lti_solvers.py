@@ -451,10 +451,10 @@ class LTISolverRegressionTests(unittest.TestCase):
                 [2.125, 1.875, -0.625],
             ),
             "modal scan": (
-                [1.0, 2.5, 5.5],
-                [[-1.0, -0.25, 1.5], [-0.25, -0.25, 0.5], [0.5, -0.25, 1.0],
-                 [0.75, 0.25, -0.25], [-1.5, 0.5, -0.5], [0.25, -0.25, 1.75]],
-                [-2.0, 0.5, 0.25, 3.75, -1.5, 0.0],
+                [-3.0, 5.0, 3.25],
+                [[0.5, 0.5, -1.0], [1.5, -0.5, 0.0], [0.0, -1.75, 1.75],
+                 [0.0, -0.75, 0.5], [0.0, -0.75, 2.0], [0.0, 1.75, -1.0]],
+                [-0.25, -2.0, 0.25, -0.75, 0.0, 0.5],
             ),
         }
 
@@ -474,6 +474,27 @@ class LTISolverRegressionTests(unittest.TestCase):
                                                rtol=0.0, atol=1e-9)
                     np.testing.assert_allclose(result.errors_for_plotting[:end - 1],
                                                dykstra.errors_for_plotting[:end - 1], rtol=0.0, atol=atol)
+
+    def test_modal_scan_evaluates_its_episodes_rather_than_stepping_them(self) -> None:
+        # Row 0 carries a multiplier at the projection but stays far from every episode's
+        # limit until cycle 97, so within this budget no entry can be certified and Ver5
+        # scans its singular episodes, from cycles 2, 3 and 36, in modal form; stepping
+        # them instead stays on the path, which is why only the count of stepped cycles
+        # can tell the two apart
+        z = np.array([-3.0, 5.0, 3.25])
+        A = np.array([[0.5, 0.5, -1.0], [1.5, -0.5, 0.0], [0.0, -1.75, 1.75],
+                      [0.0, -0.75, 0.5], [0.0, -0.75, 2.0], [0.0, 1.75, -1.0]])
+        b = np.array([-0.25, -2.0, 0.25, -0.75, 0.0, 0.5])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=60).solve().projection
+        solver = LTIVer5Solver(z, A, b, max_iter=60)
+        with mock.patch.object(lti_solver, "deflated_closed_form",
+                               wraps=lti_solver.deflated_closed_form) as scan, \
+                mock.patch.object(lti_solver, "advance", wraps=lti_solver.advance) as advance:
+            result = solver.solve()
+        self.assertFalse(result.is_settled())
+        self.assertEqual(scan.call_count, 3)
+        self.assertEqual(advance.call_count, 0)
+        np.testing.assert_allclose(result.projection, dykstra, rtol=0.0, atol=1e-12)
 
     def test_settlement_is_reported_and_recorded_from_its_cycle(self) -> None:
         # Dykstra reaches (-0.25, 0.25) in two cycles and the projection (0, 0) only in
