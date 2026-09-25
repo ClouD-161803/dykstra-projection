@@ -113,6 +113,55 @@ class LTISolverRegressionTests(unittest.TestCase):
         np.testing.assert_allclose(recorded.projection, reference, atol=1e-7)
         np.testing.assert_allclose(replayed.projection, reference, atol=1e-7)
 
+    def test_settlement_is_reported_and_recorded_from_its_cycle(self) -> None:
+        # Dykstra reaches (-0.25, 0.25) in two cycles and the projection (0, 0) only in
+        # the limit; Ver2-4 prove the active set final on cycle 2
+        z, A, b = np.array([2.0, 1.0]), np.array([[1.0, 0.0], [1.0, 1.0]]), np.zeros(2)
+        certificates = {LTIVer1Solver: None, LTIVer2Solver: "finality", LTIVer3Solver: "finality",
+                        LTIVer4Solver: "finality"}
+        for max_iter in (2, 4):
+            dykstra = DykstraProjectionSolver(z, A, b, max_iter=max_iter, track_error=True).solve()
+            self.assertFalse(dykstra.is_settled())
+            for solver_type in certificates:
+                with self.subTest(solver=solver_type.__name__, max_iter=max_iter):
+                    result = solver_type(z, A, b, max_iter=max_iter, track_error=True).solve()
+                    self.assertEqual(result.certificate, certificates[solver_type])
+                    if result.certificate is None:
+                        self.assertIsNone(result.settled_at)
+                        np.testing.assert_allclose(result.projection, dykstra.projection, atol=1e-12)
+                        continue
+
+                    # From the settling cycle on, every record is the returned limit
+                    self.assertTrue(result.is_settled())
+                    first = result.settled_at
+                    np.testing.assert_allclose(result.projection, [0.0, 0.0], atol=1e-12)
+                    np.testing.assert_allclose(result.path[first:, -1],
+                                               np.tile(result.projection, (max_iter + 1 - first, 1)), atol=1e-12)
+                    np.testing.assert_allclose(result.squared_errors[first:], 0.0, atol=1e-12)
+                    np.testing.assert_allclose(result.squared_errors[:first], dykstra.squared_errors[:first],
+                                               atol=1e-12)
+
+    def test_exported_results_carry_the_settlement(self) -> None:
+        import contextlib
+        import io
+        import tempfile
+        from visualiser import ResultExporter
+
+        z, A, b = np.array([2.0, 1.0]), np.array([[1.0, 0.0], [1.0, 1.0]]), np.zeros(2)
+        for solver_type in (DykstraProjectionSolver, LTIVer5Solver):
+            with self.subTest(solver=solver_type.__name__), tempfile.TemporaryDirectory() as directory:
+                result = solver_type(z, A, b, max_iter=4, track_error=True).solve()
+                self.assertEqual(result.is_settled(), solver_type is LTIVer5Solver)
+                path = str(Path(directory) / "result.csv")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    ResultExporter.export(result, path, solver_type.__name__, z, A, b, 4)
+                metadata = ResultExporter.load(path)["metadata"]
+                if result.is_settled():
+                    self.assertEqual(metadata["settled_at"], result.settled_at)
+                    self.assertEqual(metadata["certificate"], result.certificate)
+                else:
+                    self.assertNotIn("settled_at", metadata)
+
 
 if __name__ == "__main__":
     unittest.main()
