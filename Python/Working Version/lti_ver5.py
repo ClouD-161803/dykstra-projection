@@ -7,6 +7,60 @@ import numpy as np
 from lti_ver2 import _CF
 from lti_ver4 import LTIVer4Solver
 
+# Rows within this distance of the hint, relative to the magnitudes their slack is
+# computed from, are candidates for the active set of the projection
+_KKT_CANDIDATE_TOL = 1e-7
+
+# Error certified for the projection, relative to the step from z and the multiplier
+# terms; the stationarity residual of a feasible, complementary point bounds it
+_KKT_ACCURACY = 1e-9
+
+
+def _lawson_hanson(k: int, gradient, solve) -> np.ndarray:
+    """Lawson and Hanson's active-set method over l >= 0."""
+    # gradient(l) is minus the gradient of the objective, solve(P) the unconstrained
+    # minimiser on support P; both iteration caps only guard against rounding cycles
+    lam = np.zeros(k)
+    passive = np.zeros(k, dtype=bool)
+    for _ in range(3 * k + 10):
+        w = gradient(lam)
+        if passive.all() or w[~passive].max() <= 0.0:
+            break
+        passive[np.argmax(np.where(passive, -np.inf, w))] = True
+        for _ in range(3 * k + 10):
+            support = np.where(passive)[0]
+            step = np.zeros(k)
+            step[support] = solve(support)
+            if np.all(step[support] > 0.0):
+                lam = step
+                break
+            # Move towards the new solution until the first multiplier reaches zero
+            blocked = support[step[support] <= 0.0]
+            ratios = lam[blocked] / (lam[blocked] - step[blocked])
+            first = int(np.argmin(ratios))
+            lam = lam + ratios[first] * (step - lam)
+            lam[blocked[first]] = 0.0
+            passive &= lam > 0.0
+    return lam
+
+
+def _nonnegative_least_squares(C: np.ndarray, d: np.ndarray) -> np.ndarray:
+    """min ||C l - d|| over l >= 0."""
+    # Each support is solved on the columns of C, not the normal equations, whose
+    # conditioning is squared
+    eps = np.finfo(float).eps
+    floor = eps * max(C.shape) * np.abs(C).max(initial=0.0) * np.abs(d).max(initial=0.0)
+    return _lawson_hanson(C.shape[1], lambda lam: C.T @ (d - C @ lam) - floor,
+                          lambda P: np.linalg.lstsq(C[:, P], d, rcond=None)[0])
+
+
+def _nonnegative_quadratic(H: np.ndarray, c: np.ndarray) -> np.ndarray:
+    """min 1/2 l^T H l - c^T l over l >= 0, H positive semidefinite."""
+    eps = np.finfo(float).eps
+    floor = eps * len(c) * (np.abs(H).max(initial=0.0) + np.abs(c).max(initial=0.0))
+    return _lawson_hanson(len(c), lambda lam: c - H @ lam - floor,
+                          lambda P: np.linalg.lstsq(H[np.ix_(P, P)], c[P], rcond=None)[0])
+
 
 class LTIVer5Solver(LTIVer4Solver):
     """Deflated modal episodes."""
@@ -27,19 +81,42 @@ class LTIVer5Solver(LTIVer4Solver):
         self.eig_cond_cap = eig_cond_cap
         self.block_size = int(block_size)
 
-        # True once the result is proven to be the projection
-        self.settled = False
+    @property
+    def settled(self) -> bool:
+        """Result proven to be the projection."""
+        # Every Ver5 settlement passes the KKT test
+        return self.settled_at is not None
 
     def _settle_at_fixed_point(self, cf: _CF, cycle: int, t: int) -> None:
-        """Jump to the fixed point."""
-        self.settled = True
-        super()._settle_at_fixed_point(cf, cycle, t)
+        """Settle on a certified limit."""
+        # The finality test proves the active set final, but the fixed point of the
+        # rounded cycle map can still miss the projection, so the KKT test decides
+        certified = self._kkt_certificate(cf.x_inf, cf.active)
+        if certified is not None:
+            self._settle_certified(*certified, cycle)
+            return
+
+        # No switch can follow, so the budget's iterate is one closed-form jump away
+        k = self.max_iter - cycle
+        if k < 1:
+            return
+        z_end = np.linalg.matrix_power(cf.A_m, k) @ (self.x - cf.x_inf)
+        self._set_state(cf.x_inf + z_end, self._active_auxiliaries(cf, t + k, z_end), cf.active)
+        for later_cycle in range(cycle + 1, self.max_iter + 1):
+            self._record_cycle(later_cycle, cf.active)
 
     def _accelerate(self, start_cycle: int) -> None:
         """Run episodes to the budget."""
         p = len(self.x)
         cycle = start_cycle
         while cycle <= self.max_iter:
+            # A point that passes the KKT test is the projection whatever the episode
+            # would do next, and finding it needs no resolvent
+            certified = self._kkt_certificate(self.x, np.array(self.active))
+            if certified is not None:
+                self._settle_certified(*certified, cycle)
+                return
+
             # Closed form when I - A_m is invertible, deflated episode when it is singular
             IA = np.eye(p) - self.A_m
             if np.linalg.cond(IA) < 1e12:
@@ -53,41 +130,90 @@ class LTIVer5Solver(LTIVer4Solver):
 
     def _certified_settle(self, cf: _CF, start_cycle: int) -> bool:
         """KKT test of the episode limit."""
-        candidate = cf.x_inf
-        scale = 1.0 + max(float(np.abs(self.z).max()), float(np.abs(candidate).max()))
-
-        # The candidate must be feasible; its tight half-spaces carry the multipliers
-        slacks = self.unit_A @ candidate - self.unit_b
-        if slacks.max() > 1e-9 * scale:
+        certified = self._kkt_certificate(cf.x_inf, cf.active)
+        if certified is None:
             return False
-        tight = np.where(slacks > -1e-7 * scale)[0]
-
-        # The step from the initial point to the candidate must be a non-negative
-        # combination of the tight normals
-        residual = self.z - candidate
-        multipliers = np.zeros(self.n)
-        if tight.size == 0:
-            if np.abs(residual).max() > 1e-11 * scale:
-                return False
-        else:
-            multipliers_tight, *_ = np.linalg.lstsq(
-                self.unit_A[tight].T, residual, rcond=None
-            )
-            if multipliers_tight.min() < -1e-8 * (1.0 + np.abs(residual).max()):
-                return False
-            multipliers_tight = np.clip(multipliers_tight, 0.0, None)
-            if (np.abs(residual - self.unit_A[tight].T @ multipliers_tight).max()
-                    > 1e-11 * scale):
-                return False
-            multipliers[tight] = multipliers_tight
-
-        active = multipliers > 0.0
-        self._set_state(candidate, multipliers, active)
-        self.settled = True
-        self.settled_at, self.certificate = start_cycle, "kkt"
-        for cycle in range(start_cycle, self.max_iter + 1):
-            self._record_cycle(cycle, tuple(active))
+        self._settle_certified(*certified, start_cycle)
         return True
+
+    def _settle_certified(self, x: np.ndarray, multipliers: np.ndarray, first_cycle: int) -> None:
+        """Settle on the projection."""
+        # The multipliers are the auxiliaries of the limit: x + sum y_m a_m = z
+        active = multipliers > 0.0
+        self._set_state(x, multipliers, active)
+        self.settled_at, self.certificate = first_cycle, "kkt"
+        for cycle in range(first_cycle, self.max_iter + 1):
+            self._record_cycle(cycle, tuple(active))
+
+    def _kkt_slack_scale(self, x: np.ndarray) -> np.ndarray:
+        """Magnitudes each slack is computed from."""
+        # A point reached from z rounds with |z| and the step, not with |x|, which is
+        # tiny at an apex through the origin; rows ignore coordinates they do not touch
+        return np.abs(self.unit_A) @ (np.abs(self.z) + np.abs(self.z - x)) + np.abs(self.unit_b)
+
+    def _kkt_certificate(self, hint: np.ndarray, active: np.ndarray) -> tuple | None:
+        """Projection and multipliers, if proven."""
+        N, b, z = self.unit_A, self.unit_b, self.z
+
+        # Candidate rows: the active set and every row near the hint
+        slacks = N @ hint - b
+        near = slacks >= -_KKT_CANDIDATE_TOL * self._kkt_slack_scale(hint)
+        rows = np.where(np.asarray(active, dtype=bool) | near)[0]
+
+        # Candidate supports: the rows that bind at the projection onto the polyhedron
+        # of the candidate rows alone, by its dual (exact) and by the cone at a common
+        # point of their boundaries (accurate when one exists), then the active set and
+        # all candidate rows as they stand
+        supports = []
+        if rows.size:
+            N_rows = N[rows]
+            dual = _nonnegative_quadratic(N_rows @ N_rows.T, N_rows @ z - b[rows])
+            supports.append(rows[dual > 0.0])
+            apex = np.linalg.lstsq(N_rows, b[rows], rcond=None)[0]
+            cone = _nonnegative_least_squares(N_rows.T, z - apex)
+            supports.append(rows[cone > 0.0])
+        supports.append(np.where(np.asarray(active, dtype=bool))[0])
+        supports.append(rows)
+
+        tried = set()
+        for support in supports:
+            if tuple(support) in tried:
+                continue
+            tried.add(tuple(support))
+            certified = self._kkt_verify(support)
+            if certified is not None:
+                return certified
+        return None
+
+    def _kkt_verify(self, support: np.ndarray) -> tuple | None:
+        """KKT test at the projection onto a support."""
+        N, b, z = self.unit_A, self.unit_b, self.z
+
+        # The projection of z onto the boundaries of the support, by least squares,
+        # which is backward stable however nearly parallel the rows are
+        x = z.copy()
+        if support.size:
+            x -= np.linalg.lstsq(N[support], N[support] @ z - b[support], rcond=None)[0]
+
+        # Feasible, and multipliers nonnegative on the tight rows only, both at
+        # rounding level, so complementarity holds to rounding
+        slacks = N @ x - b
+        floor = self._rounding_floor(self._kkt_slack_scale(x))
+        if np.any(slacks > floor):
+            return None
+        tight = np.where(slacks >= -floor)[0]
+        step = z - x
+        multipliers = np.zeros(self.n)
+        if tight.size:
+            multipliers[tight] = _nonnegative_least_squares(N[tight].T, step)
+
+        # x is then the projection of z - r, so the residual r bounds its error
+        residual = step - N.T @ multipliers
+        allowed = (_KKT_ACCURACY * (np.abs(step) + np.abs(N).T @ multipliers)
+                   + self._rounding_floor(np.abs(z) + np.abs(x)))
+        if np.any(np.abs(residual) > allowed):
+            return None
+        return x, multipliers
 
     @staticmethod
     def _modal_state(cf: _CF, Q: np.ndarray, V: np.ndarray, lam: np.ndarray,
