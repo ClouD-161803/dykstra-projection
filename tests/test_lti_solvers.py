@@ -962,6 +962,41 @@ class LTISolverRegressionTests(unittest.TestCase):
                 np.testing.assert_allclose(result.path[:2], dykstra.path[:2], rtol=0.0, atol=1e-15)
                 np.testing.assert_allclose(result.path[2:, -1], 0.0, rtol=0.0, atol=1e-15)
 
+    def test_duplicated_half_space_does_not_force_an_exact_cycle_every_cycle(self) -> None:
+        # The idle copy's row of R is a cancellation, so its entries are rounding noise;
+        # a floor built from that cancelled row instead of the magnitudes it was formed
+        # from let noise predict a reactivation on every cycle
+        z = np.array([2.0, 0.0, 0.0])
+        A = np.array([[1.0, 1.0, -1.0], [1.0, 1.0, -1.0], [0.0, -1.0, 0.0]])
+        b = np.array([0.0, 0.0, -0.25])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=1000).solve().projection
+        for solver_type in LTI_SOLVERS:
+            with self.subTest(solver=solver_type.__name__):
+                solver = solver_type(z, A, b, max_iter=1000)
+                exact_cycles = spy_exact_cycles(solver)
+                result = solver.solve()
+                self.assertLessEqual(len(exact_cycles), 5)
+                np.testing.assert_allclose(result.projection, expected_result(result, solver, dykstra),
+                                           rtol=0.0, atol=1e-12)
+
+    def test_modal_scan_is_not_forced_into_exact_cycles_by_a_duplicated_half_space(self) -> None:
+        # With the certificate set aside the episode is scanned in modal form, and a slack
+        # floor built from the modal coefficients of the idle copy's cancelled row of R
+        # let noise predict a reactivation on every cycle
+        a = np.array([1.0, 2.0, 0.0]) / np.sqrt(5.0)
+        turned = np.array([np.cos(0.05) * a[0] - np.sin(0.05) * a[1],
+                           np.sin(0.05) * a[0] + np.cos(0.05) * a[1], 0.0])
+        z = a + turned + np.array([0.0, 0.0, 5.0])
+        A = np.array([a, a, turned])
+        b = np.zeros(3)
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=1000).solve().projection
+        solver = LTIVer5Solver(z, A, b, max_iter=1000)
+        exact_cycles = spy_exact_cycles(solver)
+        with mock.patch.object(lti_solver, "kkt_certificate", return_value=None):
+            result = solver.solve()
+        self.assertLessEqual(len(exact_cycles), 5)
+        np.testing.assert_allclose(result.projection, dykstra, rtol=0.0, atol=1e-12)
+
     def test_record_schedule_rejects_an_invalid_budget(self) -> None:
         z, A, b = box_line_problem()
         for max_iter in (-1, 1.5, True):
