@@ -4,22 +4,15 @@ one exact cycle and jumping the rest of the episode in closed form."""
 
 import numpy as np
 from convex_projection_solver import ConvexProjectionSolver
-from lti_numerics import RESOLVENT_COND_CAP, active_auxiliaries, advance, closed_form, cycle_map, exact_cycle
+from lti_numerics import (RESOLVENT_COND_CAP, active_auxiliaries, advance, closed_form, cycle_map,
+                          exact_cycle, unit_constraints)
 from projection_result import ProjectionResult
-
-
-def _unit_problem(z: np.ndarray, A: np.ndarray, b: np.ndarray, max_iter: int = 0) -> tuple:
-    """Validated problem and unit half-spaces."""
-    z, A, b, max_iter = ConvexProjectionSolver._validate_problem(z, A, b, max_iter, None)
-    unit_A, unit_b = np.empty_like(A), np.empty_like(b)
-    for index, (row, offset) in enumerate(zip(A, b)):
-        unit_A[index], unit_b[index] = ConvexProjectionSolver._normalise(row, offset)
-    return z, unit_A, unit_b, max_iter
 
 
 def record_schedule(z: np.ndarray, A: np.ndarray, b: np.ndarray, max_iter: int) -> tuple:
     """Record an active-set schedule for the constraints ``A @ x <= b``."""
-    z, unit_A, unit_b, max_iter = _unit_problem(z, A, b, max_iter)
+    z, A, b, max_iter = ConvexProjectionSolver._validate_problem(z, A, b, max_iter, None)
+    unit_A, unit_b = unit_constraints(A, b)
     x, y = z, np.zeros(len(unit_b))
     schedule = []
     for _ in range(max_iter):
@@ -42,7 +35,8 @@ def record_schedule(z: np.ndarray, A: np.ndarray, b: np.ndarray, max_iter: int) 
 def oracle_lti_projection(z: np.ndarray, A: np.ndarray, b: np.ndarray,
                           schedule: list) -> ProjectionResult:
     """Replay with the schedule known."""
-    z, unit_A, unit_b, _ = _unit_problem(z, A, b)
+    z, A, b, _ = ConvexProjectionSolver._validate_problem(z, A, b, 0, None)
+    unit_A, unit_b = unit_constraints(A, b)
     x, y = z, np.zeros(len(unit_b))
     for active, k in schedule:
         # One exact cycle enters the episode
