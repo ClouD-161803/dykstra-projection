@@ -3,6 +3,7 @@ the state unchanged, the auxiliary variables drift along straight lines, so the
 episode jumps directly to the cycle before the first one reaches zero."""
 
 import numpy as np
+from lti_ver2 import _RESOLVENT_COND_CAP
 from lti_ver3 import LTIVer3Solver
 
 # A cycle that moves the state by less than this leaves it frozen
@@ -88,7 +89,7 @@ class LTIVer4Solver(LTIVer3Solver):
             # Closed form when I - A_m is invertible, stall fast-forward when it is
             # singular and the state is frozen, exact stepping otherwise
             IA = np.eye(p) - self.A_m
-            if np.linalg.cond(IA) < 1e12:
+            if np.linalg.cond(IA) < _RESOLVENT_COND_CAP:
                 switch_cycle = self._closed_form_episode(cycle, IA)
             else:
                 switch_cycle = self._stall_episode(cycle) if self._is_stalled() else None

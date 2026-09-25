@@ -7,6 +7,10 @@ import numpy as np
 from lti_ver1 import LTIVer1Solver
 from projection_result import ProjectionResult
 
+# The closed form works through (I - A_m)^-1, whose rounding grows with its condition
+# number; a more ill-conditioned episode is stepped or deflated instead
+_RESOLVENT_COND_CAP = 1e8
+
 # Constants of one episode: the cycle map A_m, its fixed point x_inf, the matrix
 # RIA = R (I - A_m)^-1, the levels G and drifts beta of the auxiliaries (floors
 # Gamma on inactive rows), the rounding level of beta, the row norms of RIA and R,
@@ -122,7 +126,7 @@ class LTIVer2Solver(LTIVer1Solver):
         while cycle <= self.max_iter:
             # The closed form needs I - A_m invertible, i.e. active normals spanning the space
             IA = np.eye(p) - self.A_m
-            if np.linalg.cond(IA) < 1e12:
+            if np.linalg.cond(IA) < _RESOLVENT_COND_CAP:
                 switch_cycle = self._closed_form_episode(cycle, IA)
             else:
                 switch_cycle = self._step_episode(cycle)
