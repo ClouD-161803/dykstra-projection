@@ -398,6 +398,31 @@ class LTISolverRegressionTests(unittest.TestCase):
                 else:
                     self.assertNotIn("settled_at", metadata)
 
+    def test_frozen_stall_is_fast_forwarded_whatever_the_budget(self) -> None:
+        # The first state stays frozen while an auxiliary drains towards a crossing about
+        # 2e6 cycles away, past the budget; the second freezes only after a few stepped
+        # cycles, because its first and last active normals are orthogonal
+        r2 = np.sqrt(2.0)
+        cases = {
+            "crossing past the budget": (np.array([1e6, 0.0]),
+                                         np.array([[1.0, 0.0], [-1.0, 0.0], [1.0, 0.0]]),
+                                         np.array([1.0, 0.0, 0.5])),
+            "frozen part-way through": (np.array([10.0, 3.0, 0.5]),
+                                      np.array([[1.0, 0.0, 0.0], [1 / r2, 1 / r2, 0.0], [0.0, 1.0, 0.0]]),
+                                      np.array([1.0, r2 - 1e-4, 1.0])),
+        }
+        for case_name, (z, A, b) in cases.items():
+            reference = LTIVer1Solver(z, A, b, max_iter=20000).solve().projection
+            with self.subTest(case=case_name):
+                solver = LTIVer4Solver(z, A, b, max_iter=20000)
+                steps = []
+                advance = solver._advance_cycle
+                solver._advance_cycle = lambda: (steps.append(1), advance())
+                result = solver.solve()
+                np.testing.assert_allclose(result.projection, expected_result(result, solver, reference),
+                                           rtol=0.0, atol=1e-12 * np.abs(z).max())
+                self.assertLess(len(steps), 100)
+
     def test_ill_conditioned_episode_returns_the_iterate_or_the_projection(self) -> None:
         # A wedge 1.5e-6 rad wide gives cond(I - A_m) of about 4e11, where the fixed point
         # of the rounded cycle map misses the apex by about 3e-6
