@@ -57,7 +57,10 @@ def run_lti_example(solver_type: type[ConvexProjectionSolver], *, max_iter: int 
         f"{result.projection}"
     )
     print(f"The distance to the optimal solution is: {distance}")
-    print(f"The squared-error is {np.dot(distance, distance)}\n")
+    print(f"The squared-error is {np.dot(distance, distance)}")
+    if result.is_settled():
+        print(f"Settled from cycle {result.settled_at} by the {result.certificate} certificate")
+    print()
 
     visualiser = VerticalVisualiser(
         result,
