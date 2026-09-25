@@ -4,7 +4,7 @@ in blocks, settling by a KKT test on the episode limit, and jumping frozen
 stalls to their crossing."""
 
 import numpy as np
-from lti_ver2 import _CF
+from lti_ver2 import _CF, _RESOLVENT_COND_CAP
 from lti_ver4 import LTIVer4Solver
 
 # Rows within this distance of the hint, relative to the magnitudes their slack is
@@ -119,7 +119,7 @@ class LTIVer5Solver(LTIVer4Solver):
 
             # Closed form when I - A_m is invertible, deflated episode when it is singular
             IA = np.eye(p) - self.A_m
-            if np.linalg.cond(IA) < 1e12:
+            if np.linalg.cond(IA) < _RESOLVENT_COND_CAP:
                 switch_cycle = self._closed_form_episode(cycle, IA)
             else:
                 switch_cycle = self._deflated_episode(cycle)
@@ -245,7 +245,7 @@ class LTIVer5Solver(LTIVer4Solver):
         Q = U[:, sigma > 1e-12 * sigma[0]]
         P_1 = np.eye(p) - Q @ Q.T
         IAP = np.eye(p) - self.A_m + P_1
-        if np.linalg.cond(IAP) >= 1e12:
+        if np.linalg.cond(IAP) >= _RESOLVENT_COND_CAP:
             return self._step_episode(start_cycle)
 
         # Deflated fixed point and the closed-form constants of the episode; the

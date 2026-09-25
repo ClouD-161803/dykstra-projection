@@ -3,6 +3,7 @@ replays it with every activity change known in advance, entering each episode
 with one exact cycle and jumping the rest of the episode in closed form."""
 
 import numpy as np
+from lti_ver2 import _RESOLVENT_COND_CAP
 from lti_ver5 import LTIVer5Solver
 from projection_result import ProjectionResult
 
@@ -45,7 +46,7 @@ def oracle_lti_projection(z: np.ndarray, A: np.ndarray, b: np.ndarray,
             solver._build_cycle_map(active)
             IA = np.eye(p) - solver.A_m
             active = np.array(active)
-            if np.linalg.cond(IA) < 1e12:
+            if np.linalg.cond(IA) < _RESOLVENT_COND_CAP:
                 # Jump the remaining k - 1 cycles in closed form
                 x_inf = np.linalg.solve(IA, solver.B_m)
                 RIA = np.linalg.solve(IA.T, solver.R.T).T
