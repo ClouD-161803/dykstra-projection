@@ -5,6 +5,7 @@ import signal
 import sys
 import threading
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -13,11 +14,8 @@ WORKING_VERSION = Path(__file__).resolve().parents[1] / "Python" / "Working Vers
 sys.path.insert(0, str(WORKING_VERSION))
 
 from convex_projection_solver import DykstraProjectionSolver
-from lti_ver1 import LTIVer1Solver
-from lti_ver2 import LTIVer2Solver
-from lti_ver3 import LTIVer3Solver
-from lti_ver4 import LTIVer4Solver
-from lti_ver5 import LTIVer5Solver
+import lti_solver
+from lti_solver import LTIVer1Solver, LTIVer2Solver, LTIVer3Solver, LTIVer4Solver, LTIVer5Solver
 from oracle import oracle_lti_projection, record_schedule
 
 
@@ -38,8 +36,8 @@ def expected_result(result, solver, dykstra_iterate: np.ndarray) -> np.ndarray:
 def spy_exact_cycles(solver) -> list:
     """Cycles the solver runs as exact Dykstra cycles."""
     cycles = []
-    run_exact_cycle = solver._dykstra_cycle
-    solver._dykstra_cycle = lambda cycle: (cycles.append(cycle), run_exact_cycle(cycle))[1]
+    run_exact_cycle = solver._exact_cycle
+    solver._exact_cycle = lambda cycle: (cycles.append(cycle), run_exact_cycle(cycle))[1]
     return cycles
 
 
@@ -590,13 +588,11 @@ class LTISolverRegressionTests(unittest.TestCase):
             reference = LTIVer1Solver(z, A, b, max_iter=20000).solve().projection
             with self.subTest(case=case_name):
                 solver = LTIVer4Solver(z, A, b, max_iter=20000)
-                steps = []
-                advance = solver._advance_cycle
-                solver._advance_cycle = lambda: (steps.append(1), advance())
-                result = solver.solve()
+                with mock.patch.object(lti_solver, "advance", wraps=lti_solver.advance) as advance:
+                    result = solver.solve()
                 np.testing.assert_allclose(result.projection, expected_result(result, solver, reference),
                                            rtol=0.0, atol=1e-12 * np.abs(z).max())
-                self.assertLess(len(steps), 100)
+                self.assertLess(advance.call_count, 100)
 
     def test_stepped_singular_episode_does_not_drift_along_the_kernel(self) -> None:
         # Four active half-spaces in R^6 leave I - A_m singular, so the final episode is
@@ -730,8 +726,8 @@ class LTISolverRegressionTests(unittest.TestCase):
             with self.subTest(scale=scale):
                 dykstra = DykstraProjectionSolver(scale * z, A, scale * b, max_iter=20).solve()
                 solver = LTIVer5Solver(scale * z, A, scale * b, max_iter=20, block_size=4)
-                solver._kkt_certificate = lambda hint, active: None
-                result = solver.solve()
+                with mock.patch.object(lti_solver, "kkt_certificate", return_value=None):
+                    result = solver.solve()
                 self.assertFalse(result.is_settled())
                 np.testing.assert_allclose(result.path / scale, dykstra.path / scale, rtol=0.0, atol=1e-12)
                 np.testing.assert_allclose(result.projection / scale, dykstra.projection / scale,
