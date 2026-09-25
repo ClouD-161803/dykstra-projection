@@ -28,6 +28,11 @@ LTI_SOLVERS = (
 )
 
 
+def expected_result(result, solver, dykstra_iterate: np.ndarray) -> np.ndarray:
+    """What an LTI solver returns: the projection once settled, else Dykstra's iterate."""
+    return solver.actual_projection if result.is_settled() else dykstra_iterate
+
+
 def box_line_problem() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return a 2-D problem whose active set changes during projection."""
     z = np.array([-2.0, 1.4])
@@ -112,6 +117,56 @@ class LTISolverRegressionTests(unittest.TestCase):
         self.assertLessEqual(sum(cycles for _, cycles in schedule), 200)
         np.testing.assert_allclose(recorded.projection, reference, atol=1e-7)
         np.testing.assert_allclose(replayed.projection, reference, atol=1e-7)
+
+    def test_finality_is_invariant_under_scaling_the_problem(self) -> None:
+        # Scaling z and b by c scales every iterate and auxiliary by c, so a draining
+        # half-space must not pass the finality test because the problem is small
+        box_z, box_A, box_b = box_line_problem()
+        cases = {
+            "activity switch": (box_z, box_A, box_b, 30),
+            "draining vertex": (
+                np.array([-1.0, -1.0]),
+                np.array([[1.0, -1.0], [0.0, -1.0], [-2.0, 0.0]]),
+                np.array([-1.0, 0.0, 0.0]),
+                200,
+            ),
+        }
+
+        for case_name, (z, A, b, max_iter) in cases.items():
+            unscaled = {solver_type: solver_type(z, A, b, max_iter=max_iter).solve().projection
+                        for solver_type in LTI_SOLVERS}
+            for scale in (1e-9, 1e-12):
+                reference_solver = DykstraProjectionSolver(scale * z, A, scale * b, max_iter=max_iter)
+                standard_dykstra = reference_solver.solve().projection
+                qp_reference = reference_solver.actual_projection
+                for solver_type in LTI_SOLVERS:
+                    with self.subTest(case=case_name, scale=scale, solver=solver_type.__name__):
+                        result = solver_type(scale * z, A, scale * b, max_iter=max_iter).solve()
+                        projection = result.projection
+                        np.testing.assert_allclose(projection / scale, unscaled[solver_type], rtol=0.0, atol=1e-9)
+
+                        # The budgeted Dykstra iterate or, after a settle, the projection
+                        off_path = np.max(np.abs(projection - standard_dykstra)) / scale
+                        off_qp = np.max(np.abs(projection - qp_reference)) / scale
+                        self.assertLess(min(off_path, off_qp), 1e-9)
+                        if result.is_settled():
+                            self.assertLess(off_qp, 1e-9)
+
+    def test_draining_active_half_space_does_not_pass_the_finality_test(self) -> None:
+        # Half-space 0 stays active at the episode limit but drains by about 5e-16 per
+        # cycle, so that limit is not the projection, which sits near (5e-4, 0)
+        z = np.array([-1.0, 1.0])
+        A = np.array([[-1.0, 0.0], [0.0, 1.0], [-1e-6, -1.0]])
+        b = np.array([0.0, 0.0, -5e-10])
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=200).solve().projection
+        for solver_type in LTI_SOLVERS:
+            with self.subTest(solver=solver_type.__name__):
+                solver = solver_type(z, A, b, max_iter=200)
+                result = solver.solve()
+                self.assertNotEqual(result.certificate, "finality")
+                # Rows 1 and 2 meet at 1e-6 rad, so the projection is known only to about 1e-10
+                np.testing.assert_allclose(result.projection, expected_result(result, solver, dykstra),
+                                           rtol=0.0, atol=1e-9 if result.is_settled() else 1e-12)
 
     def test_settlement_is_reported_and_recorded_from_its_cycle(self) -> None:
         # Dykstra reaches (-0.25, 0.25) in two cycles and the projection (0, 0) only in
