@@ -1,0 +1,23 @@
+# Environment definition, replacing requirements.txt as the source of truth.
+# Set up: `uv sync` (creates .venv/ and uv.lock). Run things: `uv run python ...`, `uv run pytest`.
+# pyproject.toml and uv.lock are committed; .venv/ stays local (already gitignored).
+
+[project]
+name = "dykstra"
+version = "0.1.0"
+description = "Dykstra's projection algorithm and LTI solvers"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "numpy==2.1.1",
+    "matplotlib==3.9.2",
+    "quadprog==0.1.12",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[tool.uv]
+# research code, not an installable package: Python/ holds versioned script folders, not a module tree.
+package = false
