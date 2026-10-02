@@ -34,6 +34,15 @@ __pycache__/
 # Generated figures
 Python/Working Version/results/paper/
 
+# C build output
+C/*.dll
+C/*.so
+C/*.dylib
+C/*.obj
+C/*.o
+C/*.lib
+C/*.exp
+
 # Reference PDFs and grant-application material. Moved to ../materials/
 # because this repo is public and neither the papers nor the department's documents are ours
 # to redistribute. Ignored so a restored copy cannot be committed back by accident.
