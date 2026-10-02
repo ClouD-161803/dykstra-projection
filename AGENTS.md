@@ -29,12 +29,14 @@ Python/Working Version/        the only code that matters
   lti_numerics.py              cycle maps, closed forms, envelope horizons, the KKT certificate
   oracle.py                    replays a recorded activity schedule, for comparison
   paper_figures.py             rebuilds the write-up's figures; performance_timing.py times the solvers
+  c_solvers.py                 ctypes access to the C solvers
   lti_examples.py, run_*.py    the shared LTI example and one runner per preset and the oracle
   main.py                      interactive 2-D example
   paper_figure.py              the comparison figure used in the paper
   bin/                         legacy helper implementations, superseded, kept for reference
 Python/Previous Versions/      Versions 1-9, development history. READ-ONLY. Never edit or refactor.
-tests/                         five unittest files, run from the repo root
+C/                             accelerated.c (the deflated_modal preset) and dykstra.c, with build.ps1 and a Makefile
+tests/                         six unittest files, run from the repo root
 Latex/Current Version/         the report and paper sources; Initial Version/ is superseded
 results/                       saved experiment CSVs
 ```
@@ -60,7 +62,11 @@ Do not run this code under Python 3.14. `numpy==2.1.1` has no wheel for it, so t
 
 ```bash
 # tests, from the repo root
-python -m unittest discover -s tests -v          # 89 test methods
+python -m unittest discover -s tests -v          # 96 test methods, 7 of them skipped until the C libraries are built
+
+# the C libraries, built in place (the binaries are gitignored)
+make -C C                                              # gcc or clang
+powershell -ExecutionPolicy Bypass -File C/build.ps1   # Windows, MSVC
 
 # the interactive example (needs a GUI matplotlib backend)
 cd "Python/Working Version" && python main.py
@@ -82,6 +88,7 @@ The test files put `Python/Working Version` on `sys.path` themselves. There is n
 - An LTI solver returns Dykstra's own iterate at the budget unless `result.is_settled()`. Only `result.certificate == "kkt"` makes the result the projection, to within `1e-9` of the distance moved beyond the rounding of the data, which nearly dependent active normals amplify; a `"finality"` limit takes drifts below rounding as zero. Say which one a paper claim rests on.
 - An LTI decision on a quantity that is zero in exact arithmetic, a drift, a slack, an increment, compares it with a rounding floor on the magnitudes that were summed, and every other LTI tolerance is relative, never an absolute constant: the problem's scale and coordinates no constraint touches must not change a decision. Test new ones by scaling the problem and by adding an unrelated large coordinate.
 - Comments state what the code cannot: the reason, a constraint, a trap. Do not narrate what the code does.
+- `C/accelerated.c` follows `lti_numerics.py` piece for piece and says in a comment wherever it departs from it. A change to the LTI numerics belongs in both, and `tests/test_c_solvers.py` holds the C to the same contract: without a history, the path is checked by solving at every budget.
 - When fixing a bug, write the regression test first and confirm it fails without the fix. `tests/test_solver_regressions.py` is where those belong, and `tests/test_lti_solvers.py` for the LTI solvers and the oracle.
 
 ## Git

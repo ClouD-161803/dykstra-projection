@@ -128,6 +128,28 @@ python paper_figures.py
 python performance_timing.py
 ```
 
+## C solvers
+
+`C/` holds two dependency-free C sources with the same `A @ x <= b` problem definition: `accelerated.c`, the `deflated_modal` preset of `LTISolver` (`LTIVer5Solver`), and `dykstra.c`, plain Dykstra, the baseline it is timed against. Neither records a history: each returns the final point, a status and a few counters. `accelerated.c` returns Dykstra's own iterate at the cycle budget unless it settles, and settles only on a point that passes the KKT test. It follows `lti_numerics.py` piece for piece, except that it scans a singular episode by iterating the contracting block rather than diagonalising it, estimates the condition number of `I - A_m`, and factors the Lawson-Hanson solves incrementally.
+
+Build the two shared libraries in place, from the repository root:
+
+```bash
+make -C C                                              # gcc or clang
+powershell -ExecutionPolicy Bypass -File C/build.ps1   # Windows, MSVC
+```
+
+Then call them through `c_solvers.py` in the working-code directory:
+
+```python
+from c_solvers import accelerated_c_projection, dykstra_c_projection
+
+result = accelerated_c_projection(z, A, b, max_iter)
+result.projection, result.settled, result.cycles, result.multipliers
+```
+
+`tests/test_c_solvers.py` holds both to the LTI contract and is skipped until the libraries are built. The tests have been run on the MSVC build. With the Makefile's flags clang compiles both sources without warnings for Linux and macOS, x86-64 and arm64, and a clang build for Windows gives the MSVC build's results bit for bit; the Makefile itself has not been run.
+
 ## Examples and exports
 
 Run the comparison used for the paper from the working-code directory:
@@ -182,8 +204,10 @@ python -m unittest discover -s tests -v
 │   │   ├── oracle.py             # Activity-schedule replay experiment
 │   │   ├── paper_figures.py      # Write-up figure rebuilds
 │   │   ├── performance_timing.py # Solver timing on the local machine
+│   │   ├── c_solvers.py          # ctypes access to the C solvers
 │   │   └── bin/                 # Legacy helper implementations
 │   └── Previous Versions/       # Development history
+├── C/                           # accelerated.c, dykstra.c and their build files
 ├── results/                     # Saved experiment output
 └── tests/                       # Regression tests
 ```
