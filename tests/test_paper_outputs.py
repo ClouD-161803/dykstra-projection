@@ -20,8 +20,8 @@ from paper_figures import (
     phase_scalars,
     three_plane_arrangement,
 )
-from lti_ver3 import rigorous_deactivation_horizon
-from lti_ver5 import LTIVer5Solver
+from lti_numerics import rigorous_deactivation_horizon
+from lti_solver import LTIVer5Solver
 
 
 ANALYTIC_FIGURES = (

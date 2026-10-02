@@ -21,6 +21,11 @@ class ProjectionResult:
         converged_errors: Converged errors at each iteration (if track_error=True).
         errors_for_plotting: Error vectors for quiver plotting (if plot_errors=True).
         active_half_spaces: Active half-spaces tracking (if plot_active_halfspaces=True).
+        settled_at: First cycle whose recorded state is the limit rather than that
+            cycle's Dykstra iterate, for the LTI solvers that settle (None otherwise).
+        certificate: How the settlement was proven: "kkt" when the limit passed the
+            KKT test and is the projection to its accuracy, "finality" when the active
+            set was proven final and the limit is the fixed point of the last cycle map.
     """
     projection: np.ndarray
     path: np.ndarray | None = None
@@ -29,6 +34,8 @@ class ProjectionResult:
     converged_errors: np.ndarray | None = None
     errors_for_plotting: np.ndarray | None = None
     active_half_spaces: np.ndarray | None = None
+    settled_at: int | None = None
+    certificate: str | None = None
 
     def has_error_tracking(self) -> bool:
         """Check if error tracking data is available."""
@@ -41,3 +48,7 @@ class ProjectionResult:
     def has_active_halfspace_data(self) -> bool:
         """Check if active half-space data is available."""
         return self.active_half_spaces is not None
+
+    def is_settled(self) -> bool:
+        """Check if the result is a settled limit rather than the last iterate."""
+        return self.settled_at is not None

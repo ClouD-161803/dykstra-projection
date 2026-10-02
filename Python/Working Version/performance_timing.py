@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from convex_projection_solver import DykstraProjectionSolver
-from lti_ver5 import LTIVer5Solver
+from lti_solver import LTIVer5Solver
 from paper_figures import (
     INK,
     RED,

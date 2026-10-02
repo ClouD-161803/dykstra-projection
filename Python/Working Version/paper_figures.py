@@ -12,8 +12,8 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 from convex_projection_solver import DykstraProjectionSolver
-from lti_ver3 import rigorous_deactivation_horizon
-from lti_ver5 import LTIVer5Solver
+from lti_numerics import rigorous_deactivation_horizon
+from lti_solver import LTIVer5Solver
 
 
 OUTPUT_DIR = "results/paper"
