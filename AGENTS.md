@@ -28,12 +28,13 @@ Python/Working Version/        the only code that matters
   lti_solver.py                LTISolver, its five presets, LTIVer1Solver to LTIVer5Solver
   lti_numerics.py              cycle maps, closed forms, envelope horizons, the KKT certificate
   oracle.py                    replays a recorded activity schedule, for comparison
+  paper_figures.py             rebuilds the write-up's figures; performance_timing.py times the solvers
   lti_examples.py, run_*.py    the shared LTI example and one runner per preset and the oracle
   main.py                      interactive 2-D example
   paper_figure.py              the comparison figure used in the paper
   bin/                         legacy helper implementations, superseded, kept for reference
 Python/Previous Versions/      Versions 1-9, development history. READ-ONLY. Never edit or refactor.
-tests/                         four unittest files, run from the repo root
+tests/                         five unittest files, run from the repo root
 Latex/Current Version/         the report and paper sources; Initial Version/ is superseded
 results/                       saved experiment CSVs
 ```
@@ -59,7 +60,7 @@ Do not run this code under Python 3.14. `numpy==2.1.1` has no wheel for it, so t
 
 ```bash
 # tests, from the repo root
-python -m unittest discover -s tests -v          # 78 test methods
+python -m unittest discover -s tests -v          # 89 test methods
 
 # the interactive example (needs a GUI matplotlib backend)
 cd "Python/Working Version" && python main.py
