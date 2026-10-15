@@ -84,6 +84,10 @@ The test files put `Python/Working Version` on `sys.path` themselves. There is n
 - Agent instructions belong in this file. On the author's machine `CLAUDE.md` is gitignored globally, so a `CLAUDE.md` here would be invisible to git and would never reach anyone through the remote.
 - Do not commit PDFs, build artefacts or duplicate copies of files that already exist elsewhere in the tree.
 
+## CI
+
+- Continuous integration here is the author's learning exercise, a rehearsal before he sets up CI for a larger project. Explain, verify and review, but do not write the workflow file or change the repository's settings for him, and keep any draft workflow back until he has written his own.
+
 ## Journal
 
 If the local agent tooling provides a work journal, use it, with the project name `dykstra-projection`: a `start` entry when you begin, one entry as each batch of work is staged, and an `end` entry when you stop. Read the recent entries first, since a `start` with no matching `end` means another session may still be working in this checkout. If no such tooling is configured, skip this section; nothing in the repository depends on it.
