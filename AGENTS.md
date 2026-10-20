@@ -31,9 +31,11 @@ Python/Working Version/        the only code that matters
   lti_examples.py, run_*.py    the shared LTI example and one runner per preset and the oracle
   main.py                      interactive 2-D example
   paper_figure.py              the comparison figure used in the paper
+  paper_figures.py             the SIAM paper's figures, written beside it in results/paper
+  performance_timing.py        solver timings to a fixed accuracy, and their scaling figure
   bin/                         legacy helper implementations, superseded, kept for reference
 Python/Previous Versions/      Versions 1-9, development history. READ-ONLY. Never edit or refactor.
-tests/                         four unittest files, run from the repo root
+tests/                         five unittest files, run from the repo root
 Latex/Current Version/         the report and paper sources; Initial Version/ is superseded
 results/                       saved experiment CSVs
 ```
@@ -59,7 +61,7 @@ Do not run this code under Python 3.14. `numpy==2.1.1` has no wheel for it, so t
 
 ```bash
 # tests, from the repo root
-python -m unittest discover -s tests -v          # 78 test methods
+python -m unittest discover -s tests -v          # 89 test methods
 
 # the interactive example (needs a GUI matplotlib backend)
 cd "Python/Working Version" && python main.py
@@ -68,7 +70,7 @@ cd "Python/Working Version" && python main.py
 cd "Python/Working Version" && python paper_figure.py
 ```
 
-The test files put `Python/Working Version` on `sys.path` themselves. There is no package, no `__init__.py`, no `conftest.py`, and no pytest configuration. `tests/test_visualiser_regressions.py` calls `matplotlib.use("Agg")` before importing pyplot, so the visualiser tests are headless. `main.py` opens a window and is not.
+The test files put `Python/Working Version` on `sys.path` themselves. There is no package, no `__init__.py`, no `conftest.py`, and no pytest configuration. `tests/test_visualiser_regressions.py` calls `matplotlib.use("Agg")` before importing pyplot, so the visualiser tests are headless. `paper_figures.py` and `performance_timing.py` do the same, so they and `tests/test_paper_outputs.py` are headless too. `main.py` opens a window and is not.
 
 **Trap.** `paper_figure.py` writes to `"./results"`, relative to the current working directory. Run it from `Python/Working Version` and the CSVs land in `Python/Working Version/results/`; run it from the repo root and they land in `results/`. Both directories exist, both are tracked, and their same-named files differ, so neither set can be dated from the repo. When you touch this, resolve the output directory against the repo root rather than the cwd.
 

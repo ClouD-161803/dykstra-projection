@@ -105,12 +105,28 @@ Every preset returns Dykstra's own iterate after `max_iter` cycles unless it set
 
 `lti_numerics.py` holds the numerical pieces free of solver state. `oracle.py` uses them too: it records one Dykstra run's activity schedule and replays it with every change known in advance, for comparison.
 
+`paper_figures.py` rebuilds the SIAM paper's figures from these solvers, and `performance_timing.py` times `DykstraProjectionSolver` and `LTIVer5Solver` to a fixed accuracy on your machine. Neither is `paper_figure.py`, the comparison run under Examples and exports below.
+
 Run any preset from the working-code directory; each has a matching runner, for example:
 
 ```bash
 cd "Python/Working Version"
 python run_lti_ver5.py
 python run_oracle.py
+```
+
+`paper_figures.py` writes each figure as a PNG and a PDF into `Python/Working Version/results/paper`.
+Its last figure solves a 96-plane problem twice and takes a few seconds;
+the other three are analytic and immediate.
+
+`performance_timing.py` measures how long each solver needs to reach a squared
+error of `1e-3`, reports the median cycles and milliseconds per problem size,
+and plots the growth order. Timings are your own hardware's, so they will not
+match published ones; edit `TIERS` to change the sizes and the repeat count.
+
+```bash
+python paper_figures.py
+python performance_timing.py
 ```
 
 ## Examples and exports
@@ -165,6 +181,8 @@ python -m unittest discover -s tests -v
 │   │   ├── lti_numerics.py       # Cycle maps, closed forms, the KKT test
 │   │   ├── lti_examples.py       # Shared LTI demo setup
 │   │   ├── oracle.py             # Activity-schedule replay experiment
+│   │   ├── paper_figures.py      # Write-up figure rebuilds
+│   │   ├── performance_timing.py # Solver timing on the local machine
 │   │   └── bin/                 # Legacy helper implementations
 │   └── Previous Versions/       # Development history
 ├── results/                     # Saved experiment output

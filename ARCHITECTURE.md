@@ -4,7 +4,7 @@ How the code in `Python/Working Version/` is put together, and which of its prop
 
 ## 1. Scope and nongoals
 
-One author's research code behind a paper. It is not a library: no package, no installer, no stable API, no versioning. Callers are `main.py`, `paper_figure.py`, the LTI runners and the test suite, all inside this repository.
+One author's research code behind a paper. It is not a library: no package, no installer, no stable API, no versioning. Callers are `main.py`, `paper_figure.py`, the LTI runners, `paper_figures.py`, `performance_timing.py` and the test suite, all inside this repository.
 
 The numerics are dimension-agnostic; the dimension comes from the point being projected. The visualisation layer is 2-D only and always will be, because its job is to show geometry a reader can see. Do not try to generalise the visualisers; add a different output instead.
 
@@ -29,7 +29,7 @@ gradient.py ────> convex_projection_solver.py <──── projection_r
                      main.py, paper_figure.py
 ```
 
-The LTI solvers sit beside the core solvers, not inside them: `lti_solver.py` subclasses `ConvexProjectionSolver` and draws its numerics from `lti_numerics.py`, which knows nothing of solver state; `oracle.py` draws on `lti_numerics.py` but not on `lti_solver.py`; the `run_*.py` runners, through the shared example in `lti_examples.py`, are the LTI entry points.
+The LTI solvers sit beside the core solvers, not inside them: `lti_solver.py` subclasses `ConvexProjectionSolver` and draws its numerics from `lti_numerics.py`, which knows nothing of solver state; `oracle.py` draws on `lti_numerics.py` but not on `lti_solver.py`; the `run_*.py` runners, through the shared example in `lti_examples.py`, are the LTI entry points. `paper_figures.py` and `performance_timing.py` use `LTIVer5Solver` and `rigorous_deactivation_horizon` to rebuild the SIAM paper's figures, which they write beside the script in `results/paper`.
 
 `convex_projection_solver.py` owns the algorithms and knows nothing about plotting. `projection_result.py` is a dataclass and knows nothing at all. `visualiser.py` reads a `ProjectionResult` and the constraint arrays; it never calls a solver. `gradient.py` wraps `quadprog` and is the only place that library is named. `edge_rounder.py` produces constraint arrays and is optional: nothing else imports it at module scope.
 
@@ -119,7 +119,9 @@ The reference projection is the `quadprog` QP solution, computed once in the con
 
 `tests/test_lti_solvers.py` covers the LTI solvers and the oracle, and is where their regressions belong, test first. Most tests state the contract rather than an implementation: the same-budget Dykstra iterate or, once settled, the projection, a history equal to Dykstra's up to the settlement, and invariance under scaling the problem and adding coordinates no constraint touches. Most fixes were checked by reverting them and confirming a test fails; the exceptions are guards that no problem in the suite reaches, such as the kernel projection of the deflated solve: no singular episode in the suite is ill-conditioned enough for rounding to move the kernel component measurably. The few tests that count exact cycles or stepped cycles do so because the defect they pin is lost acceleration, not a wrong point.
 
-Each file inserts `Python/Working Version` into `sys.path` itself, which is why the suite runs from the repository root with `python -m unittest discover -s tests -v` and needs no package, no `conftest.py` and no pytest. `test_visualiser_regressions.py` calls `matplotlib.use("Agg")` before importing pyplot; `test_solver_unit.py` and `test_solver_regressions.py` never import pyplot, and `test_lti_solvers.py` imports it only through `visualiser` in its export test, which draws nothing.
+`tests/test_paper_outputs.py` covers `paper_figures.py` and `performance_timing.py`: the vertex floors, loop residuals, shedding cycle and envelope crossings the figures label, the random problem generator, a certified `LTIVer5Solver` result against the reference projection, which fails if no size settles, the timing probe, and that each analytic figure writes a PNG and a PDF into a temporary directory. The 96-plane performance figure is not run.
+
+Each file inserts `Python/Working Version` into `sys.path` itself, which is why the suite runs from the repository root with `python -m unittest discover -s tests -v` and needs no package, no `conftest.py` and no pytest. `test_visualiser_regressions.py` calls `matplotlib.use("Agg")` before importing pyplot; `test_solver_unit.py` and `test_solver_regressions.py` never import pyplot, and `test_lti_solvers.py` imports it only through `visualiser` in its export test, which draws nothing. `test_paper_outputs.py` imports it through `paper_figures`, which selects Agg first.
 
 ## 9. History and dead ends
 
