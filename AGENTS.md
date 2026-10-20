@@ -4,7 +4,7 @@ Instructions for any coding agent working in this repository. `ARCHITECTURE.md`,
 
 ## What this is
 
-A Python implementation of Dykstra's algorithm for projecting a point onto the intersection of finitely many half-spaces, plus two experimental variants, 2-D visualisers, CSV export, and the LaTeX report that uses them. Research code behind a single-author paper, not a library: there is no package, no installer, and no public API to keep stable.
+A Python implementation of Dykstra's algorithm for projecting a point onto the intersection of finitely many half-spaces, plus two experimental variants, the LTI-accelerated solvers, 2-D visualisers, CSV export, and the LaTeX report that uses them. Research code behind a single-author paper, not a library: there is no package, no installer, and no public API to keep stable.
 
 Author: Claudio Vestini, University of Oxford. Funded by Keble Research Grant KSRG118.
 
@@ -25,11 +25,19 @@ Python/Working Version/        the only code that matters
   visualiser.py                ResultExporter, Visualiser, VerticalVisualiser, ComparisonVisualiser
   gradient.py                  quadprog_solve_qp, the QP reference projection
   edge_rounder.py              rounded_box_constraints, polygonal corner rounding
+  lti_solver.py                LTISolver, its five presets, LTIVer1Solver to LTIVer5Solver
+  lti_numerics.py              cycle maps, closed forms, envelope horizons, the KKT certificate
+  oracle.py                    replays a recorded activity schedule, for comparison
+  c_solvers.py                 ctypes access to the C solvers
+  lti_examples.py, run_*.py    the shared LTI example and one runner per preset and the oracle
   main.py                      interactive 2-D example
   paper_figure.py              the comparison figure used in the paper
+  paper_figures.py             the SIAM paper's figures, written beside it in results/paper
+  performance_timing.py        solver timings to a fixed accuracy, and their scaling figure
   bin/                         legacy helper implementations, superseded, kept for reference
 Python/Previous Versions/      Versions 1-9, development history. READ-ONLY. Never edit or refactor.
-tests/                         three unittest files, run from the repo root
+C/                             accelerated.c (the deflated_modal preset) and dykstra.c, with build.ps1 and a Makefile
+tests/                         six unittest files, run from the repo root
 Latex/Current Version/         the report and paper sources; Initial Version/ is superseded
 results/                       saved experiment CSVs
 ```
@@ -55,7 +63,11 @@ Do not run this code under Python 3.14. `numpy==2.1.1` has no wheel for it, so t
 
 ```bash
 # tests, from the repo root
-python -m unittest discover -s tests -v          # 16 test methods on master
+python -m unittest discover -s tests -v          # 96 test methods, 7 of them skipped until the C libraries are built
+
+# the C libraries, built in place (the binaries are gitignored)
+make -C C                                              # gcc or clang
+powershell -ExecutionPolicy Bypass -File C/build.ps1   # Windows, MSVC
 
 # the interactive example (needs a GUI matplotlib backend)
 cd "Python/Working Version" && python main.py
@@ -64,7 +76,7 @@ cd "Python/Working Version" && python main.py
 cd "Python/Working Version" && python paper_figure.py
 ```
 
-The test files put `Python/Working Version` on `sys.path` themselves. There is no package, no `__init__.py`, no `conftest.py`, and no pytest configuration. `tests/test_visualiser_regressions.py` calls `matplotlib.use("Agg")` before importing pyplot, so the visualiser tests are headless. `main.py` opens a window and is not.
+The test files put `Python/Working Version` on `sys.path` themselves. There is no package, no `__init__.py`, no `conftest.py`, and no pytest configuration. `tests/test_visualiser_regressions.py` calls `matplotlib.use("Agg")` before importing pyplot, so the visualiser tests are headless. `paper_figures.py` and `performance_timing.py` do the same, so they and `tests/test_paper_outputs.py` are headless too. `main.py` opens a window and is not.
 
 **Trap.** `paper_figure.py` writes to `"./results"`, relative to the current working directory. Run it from `Python/Working Version` and the CSVs land in `Python/Working Version/results/`; run it from the repo root and they land in `results/`. Both directories exist, both are tracked, and their same-named files differ, so neither set can be dated from the repo. When you touch this, resolve the output directory against the repo root rather than the cwd.
 
@@ -72,15 +84,18 @@ The test files put `Python/Working Version` on `sys.path` themselves. There is n
 
 - British spelling in new names and prose: `visualiser`, `normalise`. Some existing identifiers use the `-ize` form (`_initialize_iteration`); match the file you are in rather than renaming.
 - Solvers subclass `ConvexProjectionSolver` and override `_update_error`, `solve` and `_format_output`. Shared geometry (`_normalise`, `_is_in_half_space`, `_project_onto_half_space`, `_validate_problem`) lives on the base class as static methods; new shared geometry goes there, not into a subclass.
-- `solve()` always returns a `ProjectionResult`. Its optional fields are populated by the constructor flags `track_error`, `plot_errors` and `plot_active_halfspaces`; test for them with the `has_*` predicates, not by comparing to `None` at the call site.
+- `solve()` always returns a `ProjectionResult`. Its optional fields are populated by the constructor flags `track_error`, `plot_errors` and `plot_active_halfspaces`, except `settled_at` and `certificate`, which an LTI solver sets when it settles; test for them with the `has_*` predicates and `is_settled()`, not by comparing to `None` at the call site.
 - `track_error=True` compares against the `quadprog` QP solution. That reference is exact; a finite number of Dykstra cycles generally is not. Never call the Dykstra output "the projection" in a paper claim without saying how many cycles produced it.
+- An LTI solver returns Dykstra's own iterate at the budget unless `result.is_settled()`. Only `result.certificate == "kkt"` makes the result the projection, to within `1e-9` of the distance moved beyond the rounding of the data, which nearly dependent active normals amplify; a `"finality"` limit takes drifts below rounding as zero. Say which one a paper claim rests on.
+- An LTI decision on a quantity that is zero in exact arithmetic, a drift, a slack, an increment, compares it with a rounding floor on the magnitudes that were summed, and every other LTI tolerance is relative, never an absolute constant: the problem's scale and coordinates no constraint touches must not change a decision. Test new ones by scaling the problem and by adding an unrelated large coordinate.
 - Comments state what the code cannot: the reason, a constraint, a trap. Do not narrate what the code does.
-- When fixing a bug, write the regression test first and confirm it fails without the fix. `tests/test_solver_regressions.py` is where those belong.
+- `C/accelerated.c` follows `lti_numerics.py` piece for piece and says in a comment wherever it departs from it. A change to the LTI numerics belongs in both, and `tests/test_c_solvers.py` holds the C to the same contract: without a history, the path is checked by solving at every budget.
+- When fixing a bug, write the regression test first and confirm it fails without the fix. `tests/test_solver_regressions.py` is where those belong, and `tests/test_lti_solvers.py` for the LTI solvers and the oracle.
 
 ## Git
 
 - **Never commit.** Stage with `git add` and hand back a suggested message; the author reviews and commits. On the author's machine a hook enforces this.
-- `master` is the default branch. `lti-solvers` carries PR #2 (five LTI solver variants, an oracle, and `tests/test_lti_solvers.py`), open as of 2026-09-16.
+- `master` is the default branch. `lti-solvers` carries PR #2 (the LTI solvers with their five presets, an oracle, and `tests/test_lti_solvers.py`), open as of 2026-09-16.
 - Agent instructions belong in this file. On the author's machine `CLAUDE.md` is gitignored globally, so a `CLAUDE.md` here would be invisible to git and would never reach anyone through the remote.
 - Do not commit PDFs, build artefacts or duplicate copies of files that already exist elsewhere in the tree.
 
