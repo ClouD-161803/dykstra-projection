@@ -406,6 +406,145 @@ class BenchmarkRunTests(unittest.TestCase):
                 self.assertLess(record["projection error"], 1e-9)
 
 
+import activity_figures
+import activity_study
+from activity_study import Run, change_counts, change_cycles, exact_entries, record_runs
+from lti_numerics import cycle_map
+
+
+ACTIVITY_FIGURES = ("half_space_activity_single", "half_space_activity_study",
+                    "half_space_activity_changes", "activity_toggle_tail", "multi_toggle_example",
+                    "activity_change_limit_2d", "activity_trend_final", "activity_trend_changes",
+                    "am_eigs_study")
+
+
+class ActivityRecorderTests(unittest.TestCase):
+    def assert_records_match_exact_cycle(self, generator: int, n: int, p: int, horizon: int) -> None:
+        seeds = [activity_study.study_seed(n, p, index) for index in range(4)]
+        problems = [activity_study.draw_problem(generator, n, p, seed) for seed in seeds]
+        for problem, run in zip(problems, record_runs(problems, horizon, seeds)):
+            with self.subTest(n=n, p=p, seed=run.seed):
+                # Continued to the horizon, a run stopped at a fixed point changes nothing more
+                cycles, masks, _ = exact_entries(*problem, horizon)
+                np.testing.assert_array_equal(run.cycles, cycles)
+                np.testing.assert_array_equal(run.masks, masks)
+
+    def test_the_batched_recorder_matches_exact_cycle_on_generator_2(self) -> None:
+        self.assert_records_match_exact_cycle(2, 32, 2, 1500)
+        self.assert_records_match_exact_cycle(2, 16, 4, 1500)
+
+    @unittest.skipUnless(HAS_SCIPY, BENCHMARK_GROUP)
+    def test_the_batched_recorder_matches_exact_cycle_on_generator_1(self) -> None:
+        self.assert_records_match_exact_cycle(1, 6, 2, 1500)
+        self.assert_records_match_exact_cycle(1, 10, 3, 1500)
+
+    def test_exact_cycle_walks_the_core_solver_path(self) -> None:
+        from convex_projection_solver import DykstraProjectionSolver
+
+        A, b, z = activity_study.draw_problem(2, 12, 3, activity_study.study_seed(12, 3, 0))
+        _, _, points = exact_entries(A, b, z, 60)
+        path = DykstraProjectionSolver(z, A, b, 60).solve().path
+        np.testing.assert_allclose(path[:, -1], points[:, -1], rtol=0, atol=1e-12 * np.abs(z).max())
+
+    def test_a_converged_run_stops_at_a_fixed_point_on_its_tight_set(self) -> None:
+        problems = [activity_study.draw_problem(2, 4, 2, activity_study.study_seed(4, 2, k))
+                    for k in range(3)]
+        for run in record_runs(problems, 5000):
+            with self.subTest(seed=run.seed):
+                self.assertIsNotNone(run.fixed_at)
+                self.assertTrue(run.converged)
+                self.assertLessEqual(run.converged_at, run.cycles_run)
+                np.testing.assert_array_equal(run.masks[-1], run.tight)
+
+    def test_seeds_differ_where_the_tier_seeds_coincide(self) -> None:
+        # problem_generators.problem_seed has no p, and its index runs into the next n at 1000
+        self.assertEqual(problem_generators.problem_seed(4, 1000), problem_generators.problem_seed(5, 0))
+        self.assertNotEqual(activity_study.study_seed(8, 4, 0), activity_study.study_seed(8, 2, 0))
+        self.assertNotEqual(activity_study.study_seed(4, 2, 1000), activity_study.study_seed(5, 2, 0))
+        seed = activity_study.study_seed(8, 4, 3)
+        for drawn, expected in zip(activity_study.draw_problem(2, 8, 4, seed),
+                                   problem_generators.problem(8, 4, seed)):
+            np.testing.assert_array_equal(drawn, expected)
+
+
+class ActivityCountTests(unittest.TestCase):
+    # The supplement's example: active in cycle 1, inactive in cycles 2 to 29, active in cycles 30
+    # to 68, inactive from cycle 69, beside a half-space active throughout
+    RUN = Run(seed=0, cycles=np.array([0, 1, 2, 30, 69]),
+              masks=np.array([[False, True], [True, True], [False, True], [True, True],
+                              [False, True]]),
+              cycles_run=100, fixed_at=100, converged=True, converged_at=90,
+              tight=np.array([False, True]))
+
+    def test_changes_count_from_cycle_2_unless_cycle_1_is_asked_for(self) -> None:
+        np.testing.assert_array_equal(change_counts(self.RUN), [3, 0])
+        np.testing.assert_array_equal(change_counts(self.RUN, opening=True), [4, 0])
+        np.testing.assert_array_equal(change_cycles(self.RUN, 0), [2, 30, 69])
+        np.testing.assert_array_equal(change_cycles(self.RUN, 0, opening=True), [1, 2, 30, 69])
+
+    def test_the_gap_before_the_reactivation_spans_cycles_2_to_29(self) -> None:
+        self.assertEqual(activity_figures.longest_gap(self.RUN, 0), 28)
+
+    def test_an_activation_after_cycle_0_ends_a_wait_but_no_gap(self) -> None:
+        # Active only in cycle 0, inactive in cycles 1 to 4, then active from cycle 5
+        run = Run(seed=0, cycles=np.array([0, 1, 5]), masks=np.array([[True], [False], [True]]),
+                  cycles_run=10, fixed_at=10, converged=True, converged_at=8,
+                  tight=np.array([True]))
+        self.assertEqual(activity_figures.longest_gap(run, 0), 0)
+        self.assertEqual(activity_figures.longest_wait(run, 0), 4)
+        self.assertEqual(activity_figures.longest_wait(self.RUN, 0), 28)
+
+    def test_counts_and_cumulative_changes_hold_between_entries(self) -> None:
+        cycles = np.array([1, 29, 30, 68, 69, 100])
+        counts, cumulative = activity_study.sampled(self.RUN, cycles)
+        np.testing.assert_array_equal(counts, [2, 1, 2, 2, 1, 1])
+        np.testing.assert_array_equal(cumulative, [0, 1, 2, 2, 3, 3])
+        _, cumulative = activity_study.sampled(self.RUN, cycles, opening=True)
+        np.testing.assert_array_equal(cumulative, [1, 2, 3, 3, 4, 4])
+
+    def test_percentiles_of_counts_are_counts(self) -> None:
+        values = np.array([0, 0, 1, 1, 1, 2, 2, 3, 5, 8])
+        np.testing.assert_array_equal(activity_figures.percentile(values, [5, 50, 95]), [0, 1, 8])
+
+
+class CycleMapSpectrumTests(unittest.TestCase):
+    def test_a_wedge_in_three_dimensions_contracts_at_the_squared_cosine(self) -> None:
+        # Two active unit normals at angle theta span a plane of R^3, on which A_m is the product
+        # of two projectors, with eigenvalues 0 and cos(theta)^2; the third eigenvalue of A_m is 1
+        theta = 0.3
+        unit_A = np.array([[1.0, 0.0, 0.0], [np.cos(theta), np.sin(theta), 0.0], [0.0, 0.0, 1.0]])
+        unit_b = np.zeros(3)
+        values, left_out = activity_study.span_eigenvalues(unit_A, unit_b,
+                                                           np.array([True, True, False]))
+        self.assertEqual(left_out, 1)
+        np.testing.assert_allclose(np.sort(np.abs(values)), [0.0, np.cos(theta) ** 2], atol=1e-14)
+        full = np.linalg.eigvals(cycle_map(unit_A, unit_b, (True, True, False)).A_m)
+        np.testing.assert_allclose(np.sort(np.abs(full)), [0.0, np.cos(theta) ** 2, 1.0], atol=1e-14)
+
+    def test_an_empty_episode_has_no_spectrum_on_a_span(self) -> None:
+        values, left_out = activity_study.span_eigenvalues(np.eye(2), np.ones(2),
+                                                           np.array([False, False]))
+        self.assertEqual(values.size, 0)
+        self.assertEqual(left_out, 2)
+
+
+@unittest.skipUnless(HAS_SCIPY, BENCHMARK_GROUP)
+class ActivityStudyOutputTests(unittest.TestCase):
+    def test_a_quick_run_writes_the_nine_figures_and_the_numbers(self) -> None:
+        with redirected_output() as directory:
+            numbers = activity_study.run(quick=True, workers=1)
+            written = {path.name for path in directory.iterdir()}
+        expected = {name + suffix for name in ACTIVITY_FIGURES for suffix in (".png", ".pdf")}
+        self.assertTrue(expected | {"activity_numbers.json"} <= written)
+        rows = numbers["curves"] + numbers["limit"] + numbers["trend"] + [numbers["example"]]
+        for row in rows:
+            self.assertGreater(row["recorder_checks"], 0)
+            self.assertEqual(row["recorder_check_failures"], 0)
+        self.assertTrue(numbers["example"]["agrees_with_exact_cycle"])
+        self.assertLess(numbers["single"]["core_path_difference"], 1e-12)
+        self.assertLess(numbers["eigenvalues"]["largest_modulus"], 1.0)
+
+
 from contextlib import redirect_stdout
 import io
 
