@@ -458,7 +458,9 @@ class DykstraProjectionSolver(ConvexProjectionSolver):
             # Iterate over every half plane
             for m, (unit_normal, constant_offset) in enumerate(self.unit_constraints):
                 index = (m - self.n) % self.n
-                x_temp = self.x.copy()
+                # self.x is replaced at every visit and never changed in place, hence x_temp
+                # needs no copy
+                x_temp = self.x
 
                 # Update x_m+1
                 self.x = self._project_onto_unit_half_space(x_temp + self.e[index],
@@ -468,11 +470,11 @@ class DykstraProjectionSolver(ConvexProjectionSolver):
                 self._update_error(m, x_temp, self.x, index)
 
                 # Store historical data for path and quiver plotting, offset by 1
-                self.x_historical[i + 1][m] = self.x.copy()
+                self.x_historical[i + 1][m] = self.x
 
                 # Errors
                 if self.plot_errors:
-                    self.errors_for_plotting[i][m] = self.e[m].copy()
+                    self.errors_for_plotting[i][m] = self.e[m]
 
             # Track the squared error and activity after each complete cycle through all n half-spaces
             self._track_error(i + 1)
@@ -553,7 +555,9 @@ class DykstraMapHybridSolver(ConvexProjectionSolver):
             # Iterate over every halfspace
             for m, (unit_normal, constant_offset) in enumerate(self.unit_constraints):
                 index = (m - self.n) % self.n
-                x_temp = self.x.copy()
+                # self.x is replaced at every visit and never changed in place, hence x_temp
+                # needs no copy
+                x_temp = self.x
 
                 # Update x_m+1
                 self.x = self._project_onto_unit_half_space(x_temp + self.e[index],
@@ -563,11 +567,11 @@ class DykstraMapHybridSolver(ConvexProjectionSolver):
                 self._update_error(m, x_temp, self.x, index)
 
                 # Store historical data for path and quiver plotting, offset by 1
-                self.x_historical[i + 1][m] = self.x.copy()
+                self.x_historical[i + 1][m] = self.x
 
                 # Errors
                 if self.plot_errors:
-                    self.errors_for_plotting[i][m] = self.e[m].copy()
+                    self.errors_for_plotting[i][m] = self.e[m]
 
             # Track the squared error and activity after each complete cycle through all n half-spaces
             self._track_error(i + 1)
@@ -726,7 +730,9 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
             for m, (normal, offset) in enumerate(zip(self.A, self.b)):
                 unit_normal, constant_offset = self.unit_constraints[m]
                 index = (m - self.n) % self.n
-                x_temp = self.x.copy()
+                # self.x is replaced at every visit and never changed in place, hence x_temp
+                # needs no copy
+                x_temp = self.x
 
                 # Handle stalling detection and fast-forward
                 self._handle_stalling(i)
@@ -746,7 +752,7 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
                 self._update_error(m, x_temp, self.x, index)
 
                 # Store historical data for path and quiver plotting, offset by 1
-                self.x_historical[i + 1][m] = self.x.copy()
+                self.x_historical[i + 1][m] = self.x
 
                 # Stalling as in Definition 1: the last n visits all repeat their
                 # outputs from one cycle earlier, to within the rounding of the visit,
@@ -764,7 +770,7 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
 
                 # Errors
                 if self.plot_errors:
-                    self.errors_for_plotting[i][m] = self.e[m].copy()
+                    self.errors_for_plotting[i][m] = self.e[m]
 
             # Track the squared error after each complete cycle through all n half-spaces
             self._track_error(i + 1)
