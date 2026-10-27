@@ -285,6 +285,16 @@ class SolverRegressionTests(unittest.TestCase):
                     np.testing.assert_array_equal(getattr(first, name), value, err_msg=name)
                     np.testing.assert_array_equal(getattr(second, name), value, err_msg=name)
 
+    def test_a_feasible_start_is_its_own_reference_projection(self) -> None:
+        """quadprog returns a point that satisfies every constraint one unit in the last
+        place away from itself, which a squared error kept to full precision reports as
+        a nonzero error at every cycle."""
+        z = np.array([0.3, -0.7])
+        solver = DykstraProjectionSolver(z, BOX_A, BOX_B, 3, track_error=True)
+
+        np.testing.assert_array_equal(solver.actual_projection, z)
+        np.testing.assert_array_equal(solver.solve().squared_errors, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
