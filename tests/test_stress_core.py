@@ -458,5 +458,166 @@ class InvarianceTests(unittest.TestCase):
                     self.assertEqual(jumps, reference_jumps)
 
 
+class FastForwardTests(unittest.TestCase):
+    """The stall detection solver's skip count on the paper's example."""
+
+    def test_box_line_stall_is_skipped_in_one_positive_jump(self) -> None:
+        """Each start's stall ends in one jump of the documented length. The fast-forwarded
+        run is plain Dykstra's at the corresponding cycles, and its squared error never
+        rises above the start's."""
+        for start, stall in BOX_LINE_STALLS.items():
+            with self.subTest(z=start):
+                z = np.array(start)
+                fast, jumps = run(DykstraStallDetectionSolver, z, BOX_LINE_A, BOX_LINE_B, 30,
+                                  track_error=True)
+                self.assertEqual(jumps, stall["jumps"])
+                self.assertTrue(all(skip > 0 for _, skip in jumps))
+                self.assertLessEqual(fast.squared_errors.max(), fast.squared_errors[0])
+
+                skipped = sum(skip for _, skip in jumps)
+                plain, _ = run(DykstraProjectionSolver, z, BOX_LINE_A, BOX_LINE_B,
+                               30 + skipped, track_error=True)
+                self.assertEqual(np.flatnonzero(stall_mask(plain)).tolist(),
+                                 list(range(2, stall["last_stalled_cycle"] + 1)))
+                for cycle in range(31):
+                    plain_cycle = cycle + sum(skip for i, skip in jumps if i < cycle)
+                    np.testing.assert_allclose(fast.path[cycle], plain.path[plain_cycle],
+                                               rtol=0.0, atol=1e-12)
+                    self.assertAlmostEqual(fast.squared_errors[cycle],
+                                           plain.squared_errors[plain_cycle], places=12)
+
+
+class EdgeCaseTests(unittest.TestCase):
+    def test_zero_cycles_return_the_start(self) -> None:
+        z = np.array([-2.0, 1.4])
+        for solver_type in SOLVERS:
+            with self.subTest(solver=solver_type.__name__):
+                solver = solver_type(z, BOX_LINE_A, BOX_LINE_B, 0, track_error=True,
+                                     plot_errors=True, plot_active_halfspaces=True)
+                result = solver.solve()
+                np.testing.assert_array_equal(result.projection, z)
+                self.assertEqual(result.path.shape, (1, 6, 2))
+                np.testing.assert_array_equal(result.path[0], np.tile(z, (6, 1)))
+                self.assertEqual(result.squared_errors.shape, (1,))
+                self.assertAlmostEqual(result.squared_errors[0], 4.16, places=12)
+                self.assertEqual(result.errors_for_plotting.shape, (0, 6, 2))
+                self.assertEqual(result.active_half_spaces.shape, (6, 1))
+
+    def test_one_cycle_is_one_pass_of_projections(self) -> None:
+        """With every correction zero at the start, the first cycle of each solver is the
+        same pass of alternating projections."""
+        z = np.array([-2.0, 1.4])
+        unit_A, unit_b = normalised(BOX_LINE_A, BOX_LINE_B)
+        x, outputs = z.copy(), []
+        for normal, offset in zip(unit_A, unit_b):
+            x = x - max(np.dot(x, normal) - offset, 0.0) * normal
+            outputs.append(x)
+        for solver_type in SOLVERS:
+            with self.subTest(solver=solver_type.__name__):
+                result, _ = run(solver_type, z, BOX_LINE_A, BOX_LINE_B, 1, track_error=True)
+                np.testing.assert_allclose(result.path[1], outputs, rtol=0.0, atol=1e-15)
+                np.testing.assert_allclose(result.projection, outputs[-1], rtol=0.0,
+                                           atol=1e-15)
+                self.assertEqual(result.squared_errors.shape, (2,))
+
+    def test_a_single_constraint_is_projected_onto_in_one_cycle(self) -> None:
+        z = np.array([3.0, 1.0, -2.0])
+        A = np.array([[1.0, 2.0, -2.0]])
+        b = np.array([-1.0])
+        expected = z - (np.dot(A[0], z) - b[0]) / np.dot(A[0], A[0]) * A[0]
+        for solver_type in SOLVERS:
+            with self.subTest(solver=solver_type.__name__):
+                result, jumps = run(solver_type, z, A, b, 5, track_error=True)
+                np.testing.assert_allclose(result.path[1:, 0], np.tile(expected, (5, 1)),
+                                           rtol=0.0, atol=1e-14)
+                self.assertLessEqual(result.squared_errors[1:].max(), 1e-28)
+                self.assertEqual(jumps, [])
+
+    def test_an_empty_constraint_set_returns_the_start(self) -> None:
+        z = np.array([2.0, -3.0, 0.5])
+        for solver_type in SOLVERS:
+            with self.subTest(solver=solver_type.__name__):
+                result, _ = run(solver_type, z, np.empty((0, 3)), np.empty(0), 4,
+                                track_error=True, plot_errors=True,
+                                plot_active_halfspaces=True)
+                np.testing.assert_array_equal(result.projection, z)
+                self.assertEqual(result.path.shape, (5, 0, 3))
+                np.testing.assert_array_equal(result.squared_errors, 0.0)
+                self.assertTrue(converged_mask(result).all())
+                self.assertEqual(result.errors_for_plotting.shape, (4, 0, 3))
+                self.assertEqual(result.active_half_spaces.shape, (0, 5))
+
+    def test_min_error_classifies_cycles_without_stopping_the_run(self) -> None:
+        """The core solvers run every cycle of the budget whatever min_error is, and a cycle
+        counts as converged when its squared error is below min_error."""
+        z = np.array([-2.0, 1.4])
+        for solver_type in SOLVERS:
+            with self.subTest(solver=solver_type.__name__):
+                strict, _ = run(solver_type, z, BOX_LINE_A, BOX_LINE_B, 30, track_error=True,
+                                min_error=0.0)
+                loose, _ = run(solver_type, z, BOX_LINE_A, BOX_LINE_B, 30, track_error=True,
+                               min_error=0.5)
+                np.testing.assert_array_equal(loose.path, strict.path)
+                np.testing.assert_array_equal(converged_mask(loose),
+                                              loose.squared_errors < 0.5)
+                self.assertFalse(converged_mask(strict).any())
+                self.assertNotEqual(loose.squared_errors[-1], loose.squared_errors[-2])
+
+    def test_the_wrapper_returns_the_solver_result(self) -> None:
+        z = np.array([-2.0, 1.4])
+        result = DykstraProjectionSolver(z, BOX_LINE_A, BOX_LINE_B, 12, track_error=True,
+                                         plot_errors=True,
+                                         plot_active_halfspaces=True).solve()
+        projection, path, errors, corrections, active = dykstra_projection(
+            z, BOX_LINE_A, BOX_LINE_B, 12, track_error=True, plot_errors=True,
+            plot_active_halfspaces=True)
+        np.testing.assert_array_equal(projection, result.projection)
+        np.testing.assert_array_equal(path, result.path)
+        for returned, expected in zip(errors, (result.squared_errors, result.stalled_errors,
+                                               result.converged_errors)):
+            np.testing.assert_array_equal(returned, expected)
+        np.testing.assert_array_equal(corrections, result.errors_for_plotting)
+        np.testing.assert_array_equal(active, result.active_half_spaces)
+
+        projection, path, errors, corrections, active = dykstra_projection(
+            z, BOX_LINE_A, BOX_LINE_B, 12)
+        np.testing.assert_array_equal(projection, result.projection)
+        self.assertIsNone(errors)
+        self.assertIsNone(corrections)
+        self.assertIsNone(active)
+
+    def test_delete_spaces_warns_and_keeps_every_constraint(self) -> None:
+        """delete_spaces=True is a no-op that raises a DeprecationWarning naming the line that
+        asked for it, which is what Python's default filters need to show it in a script."""
+        z = np.array([-2.0, 1.4])
+        reference, _ = run(DykstraProjectionSolver, z, BOX_LINE_A, BOX_LINE_B, 10)
+        constructors = {
+            solver_type.__name__: (
+                lambda solver_type=solver_type: solver_type(
+                    z, BOX_LINE_A, BOX_LINE_B, 10, delete_spaces=True))
+            for solver_type in SOLVERS
+        }
+        for name, construct in constructors.items():
+            with self.subTest(solver=name):
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter("always")
+                    solver = construct()
+                self.assertEqual([w.category for w in caught], [DeprecationWarning])
+                self.assertEqual(Path(caught[0].filename).name, Path(__file__).name)
+                self.assertEqual(solver.A.shape, BOX_LINE_A.shape)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    result = solver.solve()
+                if name == "DykstraProjectionSolver":
+                    np.testing.assert_array_equal(result.path, reference.path)
+        with self.subTest(solver="dykstra_projection"):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                projection, *_ = dykstra_projection(z, BOX_LINE_A, BOX_LINE_B, 10,
+                                                    delete_spaces=True)
+            self.assertEqual([w.category for w in caught], [DeprecationWarning])
+            self.assertEqual(Path(caught[0].filename).name, Path(__file__).name)
+            np.testing.assert_array_equal(projection, reference.projection)
+
+
 if __name__ == "__main__":
     unittest.main()
