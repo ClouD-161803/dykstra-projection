@@ -173,6 +173,21 @@ class CSolverTests(unittest.TestCase):
                                            DykstraProjectionSolver(z, A, b, max_iter=1).actual_projection,
                                            rtol=0.0, atol=1e-12)
 
+    def test_certificate_accepts_a_tight_row_without_a_multiplier(self) -> None:
+        # Rows 1, 4 and 5 are tight at the projection, and row 4, the only one of them
+        # that touches the second coordinate, carries no multiplier, so the step there is
+        # zero. The rounding least squares left there exceeded a stationarity allowance
+        # built from that coordinate alone, so the projection was never certified
+        z = np.array([-1.5, 0.0, 1.0])
+        A = np.array([[1.5, 0.5, 0.0], [-2.0, 0.0, 0.5], [0.0, 0.0, 0.5], [-0.5, -0.5, 2.5],
+                      [-1.0, -0.5, 3.0], [0.5, 0.0, 1.0]])
+        b = np.array([0.75, 1.0, 0.5, 0.75, 0.5, -0.25])
+        result = accelerated_c_projection(z, A, b, 200)
+        self.assertTrue(result.settled)
+        np.testing.assert_allclose(result.projection,
+                                   DykstraProjectionSolver(z, A, b, max_iter=1).actual_projection,
+                                   rtol=0.0, atol=1e-12)
+
     def test_certificate_dual_exchanges_a_dependent_row(self) -> None:
         # Ten rows in the plane, three of them with the normal (-1, 0), give the dual of
         # the candidate rows a singular Gram matrix. Lawson-Hanson met a row dependent on

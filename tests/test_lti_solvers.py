@@ -1333,6 +1333,22 @@ class LTISolverRegressionTests(unittest.TestCase):
                 self.assertEqual(result.certificate, "kkt")
                 np.testing.assert_allclose(result.projection, solver.actual_projection, rtol=0.0, atol=1e-12)
 
+    def test_certificate_accepts_a_tight_row_without_a_multiplier(self) -> None:
+        # Rows 1, 4 and 5 are tight at the projection, and row 4, the only one of them
+        # that touches the second coordinate, carries no multiplier, so the step there is
+        # zero. Least squares left about 1e-16 there and nonnegative least squares about
+        # 1e-18, beyond a stationarity allowance built from that coordinate alone, about
+        # 1e-24 and 1e-32, so no support passed and the projection was never certified,
+        # although Dykstra reaches it to 2e-15 within 5000 cycles
+        z = np.array([-1.5, 0.0, 1.0])
+        A = np.array([[1.5, 0.5, 0.0], [-2.0, 0.0, 0.5], [0.0, 0.0, 0.5], [-0.5, -0.5, 2.5],
+                      [-1.0, -0.5, 3.0], [0.5, 0.0, 1.0]])
+        b = np.array([0.75, 1.0, 0.5, 0.75, 0.5, -0.25])
+        solver = LTIVer5Solver(z, A, b, max_iter=200)
+        result = solver.solve()
+        self.assertEqual(result.certificate, "kkt")
+        np.testing.assert_allclose(result.projection, solver.actual_projection, rtol=0.0, atol=1e-12)
+
     def test_nonnegative_quadratic_exchanges_a_dependent_row_for_the_optimum(self) -> None:
         # The dual of projecting z onto three half-planes. Once rows 1 and 2 hold the
         # support, row 0 enters with a positive gradient, but three normals in the plane
