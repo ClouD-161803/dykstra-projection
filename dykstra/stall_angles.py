@@ -413,13 +413,13 @@ def angle_cycles_figure(summary: dict, horizon: int) -> float:
     if fit:
         ax.loglog(thetas, constant / thetas ** 2, color=INK, ls=":", lw=1.2)
     ax.axhline(horizon, color=GREY, lw=0.8)
-    ax.text(thetas[-1], horizon * 1.12, "horizon", color=GREY, fontsize=8, ha="right")
+    ax.text(thetas[-1], horizon * 1.12, "cycle budget", color=GREY, fontsize=8, ha="right")
     ax.set_xlabel(r"corner angle $\theta$ in rad")
     ax.set_ylabel("median cycles to converge")
     ax.set_title("Slow-phase length against corner angle (canonical starts)", fontsize=11)
     ax.legend(handles=legend_handles(FAMILY_ENTRIES + [
         (r"$\propto 1/\theta^2$", INK, ":", None, True),
-        ("median censored at the horizon", INK, "", "o", False)]), fontsize=8, frameon=False,
+        ("median censored at the cycle budget", INK, "", "o", False)]), fontsize=8, frameon=False,
         loc="lower left")
     ax.text(0.99, 0.02, f"converged: squared error below {power_of_ten(CONVERGED_SQUARED_ERROR)}",
             transform=ax.transAxes, ha="right", fontsize=8, color=GREY)
@@ -489,7 +489,7 @@ def angle_contraction_figure(summary: dict, fits: dict, horizon: int) -> None:
                for (family, p), (colour, _) in STYLES.items()]
     handles += [
         Line2D([], [], ls="", marker="o", ms=5, color=INK, markerfacecolor="white",
-               label=f"median run censored at the {horizon}-cycle horizon"),
+               label=f"median run censored at the {horizon}-cycle budget"),
         Line2D([], [], color=BLUE, lw=5, alpha=0.25, label=r"wedge lemma, $1 - \cos^4\theta$"),
         Line2D([], [], color=RED, lw=0.9, label="vertex, cycle map, $p = 3$"),
         Line2D([], [], color=RED, lw=0.9, ls="--", label="vertex, cycle map, $p = 8$")]
@@ -575,7 +575,7 @@ def accelerated_figure(summary: dict, cap: int, name: str = "accelerated_stall_s
             ax.scatter(thetas, [summary[k]["accelerated_c"] for k in keys], marker="D", s=26,
                        facecolor="none", edgecolor=RED, zorder=3, label="accelerated (C)")
         ax.axhline(cap, color=GREY, ls="--", lw=0.8)
-        ax.text(thetas[0] if thetas else 1, cap * 1.15, "cycle cap", color=GREY, fontsize=8)
+        ax.text(thetas[0] if thetas else 1, cap * 1.15, "cycle budget", color=GREY, fontsize=8)
         ax.set_xlim(max(thetas) * 1.5, min(thetas) / 1.5)
         ax.set_ylim(0.7, cap * 2)
         ax.set_xlabel(r"corner angle $\theta$ in rad")
@@ -840,7 +840,7 @@ def write_numbers(summary: dict, capture: list[dict], accelerated: dict,
     lines += ["  \\hline", "\\end{tabular}", ""]
     sweep_stalls = sum(e["approximate_cycles_relative"] * e["problems"] for e in summary.values())
     captured = [r for r in capture if r["captures"]]
-    header = (f"% the angle sweeps and the accelerated study. A median of cycles above the horizon "
+    header = (f"% the angle sweeps and the accelerated study. A median of cycles above the cycle budget "
               f"is censored. rho is the median ratio of consecutive squared errors, and the cycle "
               f"map's is the squared modulus of its slowest mode. Power laws are least-squares "
               f"fits in log-log. The accelerated rows give the median cycles to squared error "
