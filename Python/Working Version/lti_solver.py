@@ -24,7 +24,7 @@ from lti_numerics import (RESOLVENT_COND_CAP, RHO_CAP, ClosedForm, active_auxili
                           active_set_is_final, advance, auxiliary_floor, closed_form,
                           closed_form_activity, cycle_map, deflated_closed_form, exact_cycle,
                           is_frozen, jump_length, kkt_certificate, predicted_activity,
-                          rounding_floor, stall_crossing, unit_constraints)
+                          rounding_floor, stall_crossing, touched_resolvent, unit_constraints)
 from projection_result import ProjectionResult
 
 PRESETS = ("cycle_map", "closed_form", "envelope", "frozen_stall", "deflated_modal")
@@ -145,10 +145,11 @@ class LTISolver(ConvexProjectionSolver):
             if certified is not None:
                 return self._settle_certified(*certified, start_cycle)
 
-        # Closed form when I - A_m is well conditioned, which needs the active normals
-        # to span the space; otherwise the deflated form or exact stepping
+        # Closed form when I - A_m is well conditioned on the touched coordinates, which
+        # needs the active normals to span them, and otherwise the deflated form or exact
+        # stepping
         if self._closed_forms:
-            IA = np.eye(len(self.x)) - self.cmap.A_m
+            IA = touched_resolvent(self.cmap)
             if np.linalg.cond(IA) < RESOLVENT_COND_CAP:
                 return self._closed_form_episode(start_cycle, closed_form(self.cmap, self.x, self.y, IA))
             if self._deflation:
@@ -198,7 +199,10 @@ class LTISolver(ConvexProjectionSolver):
 
     def _closed_form_episode(self, start_cycle: int, cf: ClosedForm) -> _Outcome:
         """Scan a regular episode in closed form."""
-        rho = min(float(np.linalg.svd(cf.A_m, compute_uv=False)[0]), RHO_CAP) if self._jumps else None
+        # The transient has no component on an untouched coordinate, where A_m is the
+        # identity and would hold the contraction rate at one
+        touched = np.ix_(self.cmap.touched, self.cmap.touched)
+        rho = min(float(np.linalg.svd(cf.A_m[touched], compute_uv=False)[0]), RHO_CAP) if self._jumps else None
         z_prev = self.x - cf.x_inf
         t = 1
         while start_cycle + t - 1 <= self.max_iter:

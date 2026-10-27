@@ -5,7 +5,7 @@ one exact cycle and jumping the rest of the episode in closed form."""
 import numpy as np
 from convex_projection_solver import ConvexProjectionSolver
 from lti_numerics import (RESOLVENT_COND_CAP, active_auxiliaries, advance, closed_form, cycle_map,
-                          exact_cycle, unit_constraints)
+                          exact_cycle, touched_resolvent, unit_constraints)
 from projection_result import ProjectionResult
 
 
@@ -44,7 +44,7 @@ def oracle_lti_projection(z: np.ndarray, A: np.ndarray, b: np.ndarray,
         if k < 2:
             continue
         cmap = cycle_map(unit_A, unit_b, active)
-        IA = np.eye(len(x)) - cmap.A_m
+        IA = touched_resolvent(cmap)
         if np.linalg.cond(IA) < RESOLVENT_COND_CAP:
             # Jump the remaining k - 1 cycles in closed form
             cf = closed_form(cmap, x, y, IA)

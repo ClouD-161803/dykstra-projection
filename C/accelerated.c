@@ -8,8 +8,10 @@
  * fast-forwarded when frozen, and settled only on a point that passes the KKT
  * test.  Where it departs from the Python the comment at that place says why;
  * the departures are a reduced-coordinate scan in place of the
- * eigen-decomposition, an estimated condition number, and an incrementally
- * factored Lawson-Hanson.  No history is recorded.
+ * eigen-decomposition, an estimated condition number, an incrementally
+ * factored Lawson-Hanson, and coordinates no constraint touches dropped before
+ * the solve, where the Python restricts each episode decision to the others.
+ * No history is recorded.
  *
  * Usage: accelerated.h documents the one entry point.
  * Build: Windows/MSVC   powershell -ExecutionPolicy Bypass -File build.ps1
@@ -1623,6 +1625,45 @@ static size_t layout(accelerated_ws *w, double *base, size_t n, size_t p)
 static int solve_impl(int n_planes, int dim,
                       const double *A, const double *b, const double *z,
                       int max_cycles, double *x_out, double *duals_out,
+                      accelerated_info *info);
+
+/* Solves on the columns of A that some row touches, touched of the dim, and
+ * copies every other coordinate of z into x_out unchanged, since no cycle moves
+ * it. */
+static int solve_touched(int n_planes, int dim, int touched,
+                         const double *A, const double *b, const double *z,
+                         int max_cycles, double *x_out, double *duals_out,
+                         accelerated_info *info)
+{
+    const size_t n = (size_t)n_planes, t = (size_t)touched;
+    double *At = (double *)malloc(n * t * sizeof(double));
+    double *zt = (double *)malloc(t * sizeof(double));
+    double *xt = (double *)malloc(t * sizeof(double));
+    int *cols = (int *)malloc(t * sizeof(int));
+    int status = ACCELERATED_ERR_ALLOC;
+    if (At && zt && xt && cols) {
+        int c = 0;
+        for (int k = 0; k < dim; ++k) {
+            int hit = 0;
+            for (int m = 0; m < n_planes && !hit; ++m) hit = (A[(size_t)m * dim + k] != 0.0);
+            if (hit) cols[c++] = k;
+        }
+        for (size_t m = 0; m < n; ++m)
+            for (size_t j = 0; j < t; ++j) At[m * t + j] = A[m * (size_t)dim + (size_t)cols[j]];
+        for (size_t j = 0; j < t; ++j) zt[j] = z[cols[j]];
+        status = solve_impl(n_planes, touched, At, b, zt, max_cycles, xt, duals_out, info);
+        if (status >= 0) {
+            memcpy(x_out, z, (size_t)dim * sizeof(double));
+            for (size_t j = 0; j < t; ++j) x_out[cols[j]] = xt[j];
+        }
+    }
+    free(At); free(zt); free(xt); free(cols);
+    return status;
+}
+
+static int solve_impl(int n_planes, int dim,
+                      const double *A, const double *b, const double *z,
+                      int max_cycles, double *x_out, double *duals_out,
                       accelerated_info *info)
 {
     /* A budget of INT_MAX is refused: the cycle counters step one past the
@@ -1638,6 +1679,23 @@ static int solve_impl(int n_planes, int dim,
             info->status = ACCELERATED_SETTLED;
         }
         return ACCELERATED_SETTLED;
+    }
+
+    /* A coordinate no constraint touches would make I - A_m singular and send every
+     * episode down the deflated path, which changes when the solver settles.  The
+     * Python takes each episode decision on the touched coordinates, and dropping
+     * the others before the solve gives the same decisions.  With every coordinate
+     * untouched every row is zero, which the solve below reports. */
+    {
+        int touched = 0;
+        for (int k = 0; k < dim; ++k) {
+            int hit = 0;
+            for (int m = 0; m < n_planes && !hit; ++m) hit = (A[(size_t)m * dim + k] != 0.0);
+            touched += hit;
+        }
+        if (touched > 0 && touched < dim)
+            return solve_touched(n_planes, dim, touched, A, b, z, max_cycles,
+                                 x_out, duals_out, info);
     }
 
     const size_t n = (size_t)n_planes, p = (size_t)dim;

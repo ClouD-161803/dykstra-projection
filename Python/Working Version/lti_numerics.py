@@ -31,9 +31,10 @@ _KKT_ACCURACY = 1e-9
 
 # The cycle map of an episode: A_m and B_m carry a cycle's start to its end, row m of
 # R and s gives the increment R_m x + s_m of auxiliary m over a cycle from x, R_scale
-# and s_scale hold the magnitudes R and s are computed from, and span is an
-# orthonormal basis of the active normals, the only directions a cycle moves
-CycleMap = namedtuple("CycleMap", "active A_m B_m R R_scale s s_scale span")
+# and s_scale hold the magnitudes R and s are computed from, span is an orthonormal
+# basis of the active normals, the only directions a cycle moves, and touched marks
+# the coordinates some constraint touches
+CycleMap = namedtuple("CycleMap", "active A_m B_m R R_scale s s_scale span touched")
 
 # Constants of one episode's closed form: its fixed point x_inf, RIA = R (I - A_m)^-1
 # and the magnitudes RIA_scale its rounding comes from, the levels G and drifts beta
@@ -99,13 +100,26 @@ def cycle_map(unit_A: np.ndarray, unit_b: np.ndarray, active: tuple) -> CycleMap
             P = M @ P
             q = M @ q + offset * normal
 
+    # A coordinate no constraint touches is not part of the problem: the SVD can leave
+    # rounding in its row of the span, which advance would add to it every cycle
+    touched = np.any(unit_A != 0.0, axis=0)
     span = np.zeros((p, 0))
     rows = np.where(np.array(active, dtype=bool))[0]
     if rows.size:
         U, sigma, _ = np.linalg.svd(unit_A[rows].T, full_matrices=False)
         span = U[:, sigma > 1e-12 * sigma[0]]
+        span[~touched] = 0.0
     return CycleMap(active=tuple(active), A_m=P, B_m=q, R=R, R_scale=R_scale, s=s, s_scale=s_scale,
-                    span=span)
+                    span=span, touched=touched)
+
+
+def touched_resolvent(cmap: CycleMap) -> np.ndarray:
+    """I - A_m on the touched coordinates."""
+    # A_m is the identity on a coordinate no constraint touches, so the full I - A_m is
+    # singular whenever one exists, and that coordinate would decide whether an episode
+    # counts as regular
+    touched = cmap.touched
+    return np.eye(int(touched.sum())) - cmap.A_m[np.ix_(touched, touched)]
 
 
 def advance(cmap: CycleMap, x: np.ndarray) -> np.ndarray:
@@ -154,7 +168,9 @@ def _closed_form(cmap: CycleMap, x: np.ndarray, y: np.ndarray, x_inf: np.ndarray
     cancelled = R_norm <= R_rounding
     RIA_scale = np.abs(RIA)
     if cancelled.any():
-        RIA_scale[cancelled] = cmap.R_scale[cancelled] @ np.abs(np.linalg.inv(resolvent))
+        # The resolvent acts on the touched coordinates only
+        rows = np.ix_(cancelled, cmap.touched)
+        RIA_scale[rows] = cmap.R_scale[rows] @ np.abs(np.linalg.inv(resolvent))
     return ClosedForm(A_m=cmap.A_m, x_inf=x_inf, RIA=RIA, RIA_scale=RIA_scale, G=y + RIA @ z_0,
                       G_floor=rounding_floor(np.abs(y) + RIA_scale @ np.abs(z_0)),
                       beta=cmap.R @ x_inf + cmap.s,
@@ -164,10 +180,16 @@ def _closed_form(cmap: CycleMap, x: np.ndarray, y: np.ndarray, x_inf: np.ndarray
 
 
 def closed_form(cmap: CycleMap, x: np.ndarray, y: np.ndarray, IA: np.ndarray) -> ClosedForm:
-    """Closed form of a regular episode."""
-    # Fixed point x_inf = (I - A_m)^-1 B_m, by solves rather than an explicit inverse,
-    # which loses cond * eps
-    return _closed_form(cmap, x, y, np.linalg.solve(IA, cmap.B_m), np.linalg.solve(IA.T, cmap.R.T).T, IA)
+    """Closed form of a regular episode, with IA from touched_resolvent."""
+    # Fixed point x_inf = (I - A_m)^-1 B_m on the touched coordinates, by solves rather
+    # than an explicit inverse, which loses cond * eps. An untouched coordinate never
+    # moves, so x_inf keeps its value, and no auxiliary reads it
+    touched = cmap.touched
+    x_inf = x.copy()
+    x_inf[touched] = np.linalg.solve(IA, cmap.B_m[touched])
+    RIA = np.zeros_like(cmap.R)
+    RIA[:, touched] = np.linalg.solve(IA.T, cmap.R[:, touched].T).T
+    return _closed_form(cmap, x, y, x_inf, RIA, IA)
 
 
 def deflated_closed_form(cmap: CycleMap, x: np.ndarray, y: np.ndarray) -> ClosedForm | None:
@@ -175,15 +197,21 @@ def deflated_closed_form(cmap: CycleMap, x: np.ndarray, y: np.ndarray) -> Closed
     # P_1 projects onto the kernel of I - A_m, the complement of the active normals'
     # span, where the state never moves; I - A_m + P_1 is invertible when the span is
     # contracted, and the solved part lies in the span in exact arithmetic, so keeping
-    # only that part stops rounding from moving the kernel component
-    p = len(x)
-    Q = cmap.span
-    P_1 = np.eye(p) - Q @ Q.T
-    IAP = np.eye(p) - cmap.A_m + P_1
+    # only that part stops rounding from moving the kernel component. All of it is
+    # taken on the touched coordinates, as in touched_resolvent, so that an untouched
+    # one cannot change the condition number tested against the cutoff
+    touched = cmap.touched
+    Q = cmap.span[touched]
+    P_1 = np.eye(len(Q)) - Q @ Q.T
+    IAP = touched_resolvent(cmap) + P_1
     if np.linalg.cond(IAP) >= RESOLVENT_COND_CAP:
         return None
-    x_inf = P_1 @ x + Q @ (Q.T @ np.linalg.solve(IAP, cmap.B_m - P_1 @ cmap.B_m))
-    return _closed_form(cmap, x, y, x_inf, np.linalg.solve(IAP.T, cmap.R.T).T, IAP)
+    B_m = cmap.B_m[touched]
+    x_inf = x.copy()
+    x_inf[touched] = P_1 @ x[touched] + Q @ (Q.T @ np.linalg.solve(IAP, B_m - P_1 @ B_m))
+    RIA = np.zeros_like(cmap.R)
+    RIA[:, touched] = np.linalg.solve(IAP.T, cmap.R[:, touched].T).T
+    return _closed_form(cmap, x, y, x_inf, RIA, IAP)
 
 
 def active_auxiliaries(cf: ClosedForm, t: int, z_t: np.ndarray) -> np.ndarray:
