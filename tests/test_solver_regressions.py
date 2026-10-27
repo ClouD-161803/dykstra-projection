@@ -99,7 +99,7 @@ class SolverRegressionTests(unittest.TestCase):
                  for skip, iteration in FAST_FORWARD_LOG.findall(log.getvalue())]
         return result, jumps
 
-    def _assert_matches_plain_dykstra(self, fast, jumps, z, A, b, max_iter):
+    def _assert_matches_plain_dykstra(self, fast, jumps, z, A, b, max_iter, scale=1.0):
         """Every fast-forwarded cycle must be a cycle plain Dykstra also reaches."""
         plain = DykstraProjectionSolver(
             z, A, b, max_iter + sum(skip for _, skip in jumps), track_error=True
@@ -109,10 +109,11 @@ class SolverRegressionTests(unittest.TestCase):
             plain_cycle = cycle + sum(skip for i, skip in jumps if i < cycle)
             self.assertAlmostEqual(
                 fast.squared_errors[cycle], plain.squared_errors[plain_cycle],
-                places=9, msg=f"cycle {cycle} against plain cycle {plain_cycle}"
+                delta=5e-10 * scale ** 2,
+                msg=f"cycle {cycle} against plain cycle {plain_cycle}"
             )
             np.testing.assert_allclose(
-                fast.path[cycle, -1], plain.path[plain_cycle, -1], atol=1e-9,
+                fast.path[cycle, -1], plain.path[plain_cycle, -1], atol=1e-9 * scale,
                 err_msg=f"cycle {cycle} against plain cycle {plain_cycle}"
             )
 
@@ -169,6 +170,25 @@ class SolverRegressionTests(unittest.TestCase):
 
         self.assertEqual(jumps, [])
         self._assert_matches_plain_dykstra(fast, jumps, z, A, b, max_iter=40)
+
+    def _fast_forward_box_line(self, start, scale, max_iter=30):
+        """Fast-forward the scaled box and line, check it against plain Dykstra, and
+        return the logged jumps."""
+        z = scale * np.array(start)
+        fast, jumps = self._fast_forward(z, BOX_LINE_A, scale * BOX_LINE_B, max_iter)
+        self._assert_matches_plain_dykstra(fast, jumps, z, BOX_LINE_A, scale * BOX_LINE_B,
+                                           max_iter, scale=scale)
+        return jumps
+
+    def test_fast_forward_skip_count_is_the_same_on_either_side_of_a_tie(self) -> None:
+        """From (-2, 1.4) the draining half-space's d_m / -s_m is 4 in exact arithmetic,
+        where its active and inactive branches give the same point. Rounding made the
+        ratio 4.000000000000001 at scale 1 and 4.0 at scale 1e6, so the skip was 4 at one
+        scale and 3 at the other, and from (-4, 1.4) it was 14 and 13."""
+        for scale in (1.0, 1e6):
+            with self.subTest(scale=scale):
+                self.assertEqual(self._fast_forward_box_line([-2.0, 1.4], scale), [(2, 4)])
+                self.assertEqual(self._fast_forward_box_line([-4.0, 1.4], scale), [(2, 14)])
 
     def test_squared_errors_keep_their_value_at_small_scales(self) -> None:
         """The box and line from (-2, 1.4), scaled by 1e-6, starts at squared error
