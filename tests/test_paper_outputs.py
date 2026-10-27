@@ -905,6 +905,35 @@ class CostModelTests(unittest.TestCase):
         self.assertAlmostEqual(values["c_speedup"], 2.2)
 
 
+class ScheduleTimingTests(unittest.TestCase):
+    def test_a_run_of_each_schedule_writes_its_own_records_and_the_comparison(self) -> None:
+        implementations = ("python", "c") if c_solvers.libraries_built() else ("python",)
+        with redirected_output() as directory, redirect_stdout(io.StringIO()):
+            for schedule in performance_timing.COMPARED_SCHEDULES:
+                performance_timing.run(performance_timing.SMALL_TIERS, 1, implementations,
+                                       schedule=schedule)
+                performance_timing.run(performance_timing.WEDGE_CELLS[:2], 1, implementations,
+                                       schedule=schedule, family="wedge")
+            rows = performance_timing.compare_schedules("compared")
+            written = {path.name for path in directory.iterdir()}
+        for schedule in performance_timing.COMPARED_SCHEDULES:
+            for family in ("dense", "wedge"):
+                with self.subTest(schedule=schedule, family=family):
+                    self.assertIn(performance_timing.output_name("performance_timing", family, schedule)
+                                  + ".csv", written)
+        self.assertIn("tab-kkt-schedules.tex", written)
+        self.assertEqual(len(rows), len(implementations) * len(performance_timing.COMPARED_SCHEDULES)
+                         * (len(performance_timing.SMALL_TIERS) + 2))
+        # the C settles on the cycle the Python does, under every schedule
+        if len(implementations) == 2:
+            cycles = {(r["family"], r["tier"], r["schedule"], r["implementation"]): r["settle cycles"]
+                      for r in rows}
+            for (family, tier, schedule, implementation), settle in cycles.items():
+                if implementation == "c":
+                    with self.subTest(family=family, tier=tier, schedule=schedule):
+                        self.assertEqual(settle, cycles[(family, tier, schedule, "python")])
+
+
 
 @unittest.skipUnless(c_solvers.libraries_built(), "build the C solvers first, see the README")
 class CValidationSettleCycleTests(unittest.TestCase):
