@@ -461,43 +461,69 @@ def _kkt_slack_scale(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray, x: n
     return np.abs(unit_A) @ (np.abs(z) + np.abs(z - x)) + np.abs(unit_b)
 
 
+class KKTMemo:
+    """Work of the KKT tests already run in one solve."""
+
+    # A candidate support follows from the candidate rows alone, and a verdict from the
+    # support alone, once z and the constraints are fixed, as they are through a solve. A
+    # support that failed fails again, so reusing either changes neither the outcome nor
+    # the point
+    def __init__(self) -> None:
+        self.derived = {}
+        self.rejected = set()
+
+
 @ignore_blas_flags
 def kkt_certificate(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray,
-                    hint: np.ndarray, active: np.ndarray) -> tuple | None:
+                    hint: np.ndarray, active: np.ndarray, memo: KKTMemo | None = None) -> tuple | None:
     """Projection and multipliers, if proven."""
     # Candidate rows: the active set and every row near the hint
     active = np.asarray(active, dtype=bool)
     slacks = unit_A @ hint - unit_b
     near = slacks >= -_KKT_CANDIDATE_TOL * _kkt_slack_scale(z, unit_A, unit_b, hint)
     rows = np.where(active | near)[0]
+    memo = KKTMemo() if memo is None else memo
 
-    # Candidate supports: the rows that bind at the projection onto the polyhedron of
-    # the candidate rows alone, by its dual (exact) and by the cone at a common point
-    # of their boundaries (accurate when one exists), then the active set, all candidate
-    # rows as they stand, and, when there are at most _KKT_EXHAUSTIVE_ROWS candidate
-    # rows, every subset of them
-    supports = []
-    if rows.size:
-        N = unit_A[rows]
-        dual = nonnegative_quadratic(N @ N.T, N @ z - unit_b[rows])
-        supports.append(rows[dual > 0.0])
-        apex = np.linalg.lstsq(N, unit_b[rows], rcond=None)[0]
-        cone = nonnegative_least_squares(N.T, z - apex)
-        supports.append(rows[cone > 0.0])
-    supports.append(np.where(active)[0])
-    supports.append(rows)
-    if rows.size <= _KKT_EXHAUSTIVE_ROWS:
-        supports += [np.array(subset) for size in range(1, rows.size + 1)
-                     for subset in combinations(rows, size)]
+    def derived(dual: bool) -> np.ndarray:
+        """Rows binding at the projection onto the candidate rows' polyhedron."""
+        key = (tuple(rows), dual)
+        if key not in memo.derived:
+            N = unit_A[rows]
+            if dual:
+                weights = nonnegative_quadratic(N @ N.T, N @ z - unit_b[rows])
+            else:
+                apex = np.linalg.lstsq(N, unit_b[rows], rcond=None)[0]
+                weights = nonnegative_least_squares(N.T, z - apex)
+            memo.derived[key] = rows[weights > 0.0]
+        return memo.derived[key]
+
+    def supports():
+        """Candidate supports in the order they are tried."""
+        # The rows that bind at the projection onto the polyhedron of the candidate rows
+        # alone, by its dual (exact) and by the cone at a common point of their boundaries
+        # (accurate when one exists), then the active set, all candidate rows as they
+        # stand, and, when there are at most _KKT_EXHAUSTIVE_ROWS candidate rows, every
+        # subset of them. Each is built only once the ones before it have failed
+        if rows.size:
+            yield derived(True)
+            yield derived(False)
+        yield np.where(active)[0]
+        yield rows
+        if rows.size <= _KKT_EXHAUSTIVE_ROWS:
+            for size in range(1, rows.size + 1):
+                for subset in combinations(rows, size):
+                    yield np.array(subset)
 
     tried = set()
-    for support in supports:
-        if tuple(support) in tried:
+    for support in supports():
+        key = tuple(support)
+        if key in tried or key in memo.rejected:
             continue
-        tried.add(tuple(support))
+        tried.add(key)
         certified = _kkt_verify(z, unit_A, unit_b, support)
         if certified is not None:
             return certified
+        memo.rejected.add(key)
     return None
 
 

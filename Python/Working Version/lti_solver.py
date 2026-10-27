@@ -20,7 +20,7 @@ then it returns the limit, from the cycle recorded in settled_at on."""
 from collections import namedtuple
 import numpy as np
 from convex_projection_solver import ConvexProjectionSolver
-from lti_numerics import (RESOLVENT_COND_CAP, RHO_CAP, ClosedForm, active_auxiliaries,
+from lti_numerics import (RESOLVENT_COND_CAP, RHO_CAP, ClosedForm, KKTMemo, active_auxiliaries,
                           active_set_is_final, advance, auxiliary_floor, closed_form,
                           closed_form_activity, cycle_map, deflated_closed_form, exact_cycle,
                           ignore_blas_flags, is_frozen, jump_length, kkt_certificate,
@@ -104,6 +104,7 @@ class LTISolver(ConvexProjectionSolver):
         self.unit_A, self.unit_b = unit_constraints(self.A, self.b)
         self.y = np.zeros(self.n)
         self._recorded_y = np.zeros(self.n)
+        self._kkt_memo = KKTMemo()
 
         # Track error and activity at the initial point
         self._track_error(0)
@@ -151,7 +152,7 @@ class LTISolver(ConvexProjectionSolver):
         # A point that passes the KKT test is the projection whatever the episode
         # would do next, and finding it needs no resolvent
         if self._deflation:
-            certified = kkt_certificate(self.z, self.unit_A, self.unit_b, self.x, active)
+            certified = kkt_certificate(self.z, self.unit_A, self.unit_b, self.x, active, self._kkt_memo)
             if certified is not None:
                 return self._settle_certified(*certified, start_cycle)
 
@@ -266,7 +267,7 @@ class LTISolver(ConvexProjectionSolver):
         cf = deflated_closed_form(self.cmap, self.x, self.y) if active.any() else None
         if cf is None:
             return self._step_episode(start_cycle)
-        certified = kkt_certificate(self.z, self.unit_A, self.unit_b, cf.x_inf, active)
+        certified = kkt_certificate(self.z, self.unit_A, self.unit_b, cf.x_inf, active, self._kkt_memo)
         if certified is not None:
             return self._settle_certified(*certified, start_cycle)
 
@@ -349,7 +350,7 @@ class LTISolver(ConvexProjectionSolver):
             self.settled_at, self.certificate = cycle, "finality"
             self._record_limit(cycle)
             return _SETTLED
-        certified = kkt_certificate(self.z, self.unit_A, self.unit_b, cf.x_inf, cf.active)
+        certified = kkt_certificate(self.z, self.unit_A, self.unit_b, cf.x_inf, cf.active, self._kkt_memo)
         if certified is not None:
             return self._settle_certified(*certified, cycle)
 
