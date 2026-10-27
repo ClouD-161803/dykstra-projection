@@ -6,6 +6,7 @@ import sys
 import threading
 import unittest
 from unittest import mock
+import warnings
 
 import numpy as np
 
@@ -1455,6 +1456,30 @@ class LTISolverRegressionTests(unittest.TestCase):
                 for name, value in kept.items():
                     np.testing.assert_array_equal(getattr(first, name), value, err_msg=name)
                     np.testing.assert_array_equal(getattr(second, name), value, err_msg=name)
+
+    def test_a_solve_in_32_dimensions_raises_no_floating_point_warning(self) -> None:
+        # numpy 2.1 linked to Apple's Accelerate, as on the author's machine, reports the
+        # floating-point flags that Accelerate leaves set after products of finite
+        # matrices from about size 15 up, as divide-by-zero, overflow and invalid-value
+        # warnings in matmul, which the cycle maps, closed forms and Lawson-Hanson printed
+        z = np.full(32, 2.0)
+        A = np.vstack([np.eye(32), -np.eye(32), np.ones((1, 32))])
+        b = np.append(np.ones(64), 10.0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            for solver_type in LTI_SOLVERS:
+                with self.subTest(solver=solver_type.__name__):
+                    solver = solver_type(z, A, b, max_iter=20)
+                    result = solver.solve()
+                    np.testing.assert_allclose(result.projection, solver.actual_projection, rtol=0.0, atol=1e-12)
+            # The row summing the coordinates binds, so the projection is 10 / 32 in each
+            schedule, _ = record_schedule(z, A, b, 20)
+            np.testing.assert_allclose(oracle_lti_projection(z, A, b, schedule).projection, np.full(32, 0.3125),
+                                       rtol=0.0, atol=1e-12)
+            # The Gram matrix is formed elementwise, since a product here would warn
+            N = np.vstack([np.eye(32), np.ones((1, 32)) / np.sqrt(32.0)])
+            gram = (N[:, None, :] * N[None, :, :]).sum(axis=2)
+            nonnegative_quadratic(gram, (N * z).sum(axis=1) - np.append(np.ones(32), 10.0 / np.sqrt(32.0)))
 
     def test_untouched_coordinate_does_not_change_the_settlement(self) -> None:
         # Every episode of this problem is regular in the plane. A coordinate no constraint
