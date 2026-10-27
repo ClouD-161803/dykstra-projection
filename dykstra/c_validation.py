@@ -72,7 +72,7 @@ def compare(z: np.ndarray, A: np.ndarray, b: np.ndarray, budget: int) -> dict:
         "same status": python_accelerated.settled == c_accelerated.settled,
         "accelerated distance": float(np.max(np.abs(c_accelerated.projection - python_point))),
         "settled cycles agree": (not c_accelerated.settled
-                                 or c_accelerated.cycles + 1 == python_accelerated.settled_at),
+                                 or c_accelerated.settled_at == python_accelerated.settled_at),
     }
 
 
