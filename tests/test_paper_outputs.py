@@ -25,6 +25,7 @@ from paper_figures import (
 )
 from lti_numerics import rigorous_deactivation_horizon
 from lti_solver import LTIVer5Solver
+import benchmark
 import c_solvers
 import c_validation
 import problem_generators
@@ -369,6 +370,40 @@ class CValidationTests(unittest.TestCase):
         self.assertEqual(results["mismatched"], 0)
         self.assertEqual(results["certified"], 4)
         self.assertLess(results["certified_worst"], 1e-9)
+
+
+class BenchmarkOptionTests(unittest.TestCase):
+    def test_the_profiles_set_the_options_qpbenchmark_sets(self) -> None:
+        self.assertEqual(benchmark.solver_options("osqp", "low accuracy"),
+                         {"eps_abs": 1e-3, "eps_rel": 0.0, "time_limit": benchmark.TIME_LIMIT})
+        self.assertEqual(benchmark.solver_options("quadprog", "high accuracy"), {})
+        self.assertEqual(benchmark.solver_options("piqp", "mid accuracy")["check_duality_gap"],
+                         True)
+        self.assertEqual(benchmark.solver_options("scs", "default"),
+                         {"time_limit_secs": benchmark.TIME_LIMIT})
+        self.assertEqual(len(benchmark.TIERS) * benchmark.SEEDS, 45)
+        self.assertTrue(all(n == 4 * p - 4 for n, p in benchmark.TIERS))
+
+
+@unittest.skipUnless(HAS_QPSOLVERS and HAS_SCIPY, BENCHMARK_GROUP)
+@unittest.skipUnless(c_solvers.libraries_built(), "needs the C solvers: make -C C")
+class BenchmarkRunTests(unittest.TestCase):
+    def test_a_reduced_benchmark_solves_every_problem_and_writes_the_tables(self) -> None:
+        with redirected_output() as directory:
+            records = benchmark.run(benchmark.TIERS[:1], 1, oracle=True)
+            written = {path.name for path in directory.iterdir()}
+        self.assertTrue({"benchmark.csv", "tab-sm-bench-tiers.tex", "tab-sm-bench-profiles.tex",
+                         "tab-benchmark-dense.tex"} <= written)
+        solvers = {r["solver"] for r in records}
+        self.assertTrue(set(benchmark.QP_SOLVERS) | {"accelerated", "Dykstra", "oracle"} <= solvers)
+        for record in records:
+            with self.subTest(solver=record["solver"], profile=record["profile"]):
+                self.assertTrue(record["solved"])
+                self.assertLess(record["projection error"], 1e-2)
+        for record in records:
+            if record["solver"] in ("accelerated", "Dykstra"):
+                self.assertLess(record["primal residual"], 1e-10)
+                self.assertLess(record["projection error"], 1e-9)
 
 
 if __name__ == "__main__":
