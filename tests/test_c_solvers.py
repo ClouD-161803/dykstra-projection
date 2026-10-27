@@ -147,6 +147,23 @@ class CSolverTests(unittest.TestCase):
                 np.testing.assert_allclose(lifted.multipliers, plain.multipliers, rtol=0.0, atol=1e-12)
                 self.assertEqual(lifted.projection[position], 1e8)
 
+    def test_certificate_dual_exchanges_a_dependent_row(self) -> None:
+        # Ten rows in the plane, three of them with the normal (-1, 0), give the dual of
+        # the candidate rows a singular Gram matrix. Lawson-Hanson met a row dependent on
+        # its support, could not bring it in, and stopped at a support the KKT test
+        # rejects, so the projection was certified only after 10 cycles, where the
+        # Python certifies it on entering cycle 2
+        z = np.array([0.5, -2.5])
+        A = np.array([[-0.5, 3.0], [0.5, -0.5], [0.5, -1.0], [1.0, -1.0], [2.5, -2.0],
+                      [-1.5, 0.0], [-0.5, 0.0], [-1.0, 0.0], [1.5, -0.5], [-2.0, -0.5]])
+        b = np.array([1.0, 0.5, 0.5, 1.5, 3.0, -2.0, -0.5, -1.0, 2.5, -2.75])
+        result = accelerated_c_projection(z, A, b, 200)
+        self.assertTrue(result.settled)
+        self.assertEqual(result.cycles, 1)
+        np.testing.assert_allclose(result.projection,
+                                   DykstraProjectionSolver(z, A, b, max_iter=1).actual_projection,
+                                   rtol=0.0, atol=1e-12)
+
     def test_the_result_scales_with_the_problem(self) -> None:
         for z, A, b in [box_line_problem()] + bounded_problems()[:2]:
             for max_iter in (5, 400):

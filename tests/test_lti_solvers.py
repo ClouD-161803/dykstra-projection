@@ -1307,6 +1307,21 @@ class LTISolverRegressionTests(unittest.TestCase):
                 np.testing.assert_allclose(nonnegative_least_squares(C, np.array([1e-6, untouched])),
                                            [1e-6], rtol=1e-12, atol=0.0)
 
+    def test_nonnegative_quadratic_exchanges_a_dependent_row_for_the_optimum(self) -> None:
+        # The dual of projecting z onto three half-planes. Once rows 1 and 2 hold the
+        # support, row 0 enters with a positive gradient, but three normals in the plane
+        # are dependent, and the minimum-norm solve on all three gave row 0 a negative
+        # multiplier. Dropping it again repeated the same iteration until the cap, at a
+        # point that violates row 0 by 0.046, where the projection binds rows 0 and 2
+        N = np.array([[-1.0, 3.0], [1.0, 2.0], [5.0, -13.0]])
+        N /= np.linalg.norm(N, axis=1)[:, None]
+        projection = np.array([-1.25, 0.5])
+        b = N @ projection + np.array([0.0, 0.75, 0.0])
+        z = np.array([0.0, 1.25])
+        multipliers = nonnegative_quadratic(N @ N.T, N @ z - b)
+        self.assertTrue(np.all(multipliers >= 0.0))
+        np.testing.assert_allclose(z - N.T @ multipliers, projection, rtol=0.0, atol=1e-12)
+
     def test_nonnegative_quadratic_keeps_a_small_positive_gradient_beside_a_large_one(self) -> None:
         # A noise threshold scaled by the largest entry of c let it hide a small positive
         # gradient
