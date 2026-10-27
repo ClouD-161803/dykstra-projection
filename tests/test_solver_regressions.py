@@ -180,6 +180,14 @@ class SolverRegressionTests(unittest.TestCase):
                                            max_iter, scale=scale)
         return jumps
 
+    def test_fast_forward_detects_a_stall_whose_outputs_jitter(self) -> None:
+        """Scaled by 1e-6, some outputs of each frozen cycle of the box and line differ
+        from the previous cycle's in their last bit. Requiring equal outputs never flagged
+        the stall from (-2, 1.4), and flagged the one from (-4, 1.4) only at iteration 12,
+        where it skipped 3 cycles rather than 14."""
+        self.assertEqual(self._fast_forward_box_line([-2.0, 1.4], 1e-6), [(2, 4)])
+        self.assertEqual(self._fast_forward_box_line([-4.0, 1.4], 1e-6), [(2, 14)])
+
     def test_fast_forward_skip_count_is_the_same_on_either_side_of_a_tie(self) -> None:
         """From (-2, 1.4) the draining half-space's d_m / -s_m is 4 in exact arithmetic,
         where its active and inactive branches give the same point. Rounding made the
