@@ -48,13 +48,21 @@ class CSolverResult:
     # state that no further cycle changes; otherwise the point is the iterate at
     # the budget. The multipliers refer to the rows of A as they were passed.
     # exact_cycles counts the cycles run as plain Dykstra cycles, the first
-    # included, which for plain Dykstra is every cycle
+    # included, which for plain Dykstra is every cycle. The other counters are
+    # the accelerated solver's and zero for plain Dykstra: the episodes it scanned
+    # in closed form, regular or deflated, those it stepped through the cycle map,
+    # its exact cycles after the first, and the jumps whose cycles cycles_skipped
+    # sums
     projection: np.ndarray
     settled: bool
     cycles: int
     multipliers: np.ndarray
     exact_cycles: int = 0
     cycles_skipped: int = 0
+    episodes: int = 0
+    step_episodes: int = 0
+    switches: int = 0
+    skips: int = 0
 
 
 def library_path(name: str) -> Path:
@@ -111,10 +119,13 @@ def _solve(name: str, z: np.ndarray, A: np.ndarray, b: np.ndarray,
         raise RuntimeError(f"The C {name} solver failed with code {code}.")
     # The accelerated solver counts its exact cycles after the first
     accelerated = name == "accelerated"
+    counters = ({"cycles_skipped": info.cycles_skipped, "episodes": info.episodes,
+                 "step_episodes": info.step_episodes, "switches": info.switches,
+                 "skips": info.skips} if accelerated else {})
     return CSolverResult(projection=x, settled=(code == 0), cycles=info.cycles,
                          multipliers=multipliers[:n],
                          exact_cycles=info.switches + 1 if accelerated else info.cycles,
-                         cycles_skipped=info.cycles_skipped if accelerated else 0)
+                         **counters)
 
 
 def accelerated_c_projection(z: np.ndarray, A: np.ndarray, b: np.ndarray,
