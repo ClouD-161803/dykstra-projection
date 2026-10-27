@@ -980,6 +980,9 @@ class CostModelTests(unittest.TestCase):
         self.assertAlmostEqual(values["c_speedup"], 2.2)
 
 
+from dykstra import compaction_only
+
+
 class ScheduleTimingTests(unittest.TestCase):
     def test_a_run_of_each_schedule_writes_its_own_records_and_the_comparison(self) -> None:
         implementations = ("python", "c") if c_solvers.libraries_built() else ("python",)
@@ -1007,6 +1010,29 @@ class ScheduleTimingTests(unittest.TestCase):
                 if implementation == "c":
                     with self.subTest(family=family, tier=tier, schedule=schedule):
                         self.assertEqual(settle, cycles[(family, tier, schedule, "python")])
+
+
+class CompactionOnlyTests(unittest.TestCase):
+    def test_a_quick_run_follows_dykstra_to_the_budget_and_checks_the_stall_length(self) -> None:
+        with redirected_output() as directory, redirect_stdout(io.StringIO()):
+            records, checks = compaction_only.run(
+                compaction_only.QUICK_WEDGE_CELLS, compaction_only.QUICK_STALL_DIMENSIONS,
+                compaction_only.QUICK_DENSE_TIERS, compaction_only.QUICK_PROBLEMS, workers=1)
+            written = {path.name for path in directory.iterdir()}
+        self.assertTrue({"tab-compaction-only.tex", "compaction_only.csv", "tab-stall-length.tex",
+                         "stall_length.csv"} <= written)
+        self.assertEqual({record["family"] for record in records}, {"wedge", "stall", "dense"})
+        for record in records:
+            with self.subTest(row=record["row"], index=record["index"]):
+                self.assertEqual((record["settled"], record["c_settled"], record["kkt_attempts"]),
+                                 (False, False, 0))
+                self.assertEqual(record["accelerated_first_within"], record["dykstra_first_within"])
+                self.assertLess(record["largest_relative_deviation"], 1e-12)
+                self.assertIn(record["ended_by"], ("budget", "finality, then the budget"))
+        for check in checks:
+            with self.subTest(p=check["p"]):
+                self.assertTrue(check["matches"])
+                self.assertEqual(check["relative_period"], check["n_stall"] - 1)
 
 
 
