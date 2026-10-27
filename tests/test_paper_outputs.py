@@ -1,5 +1,7 @@
 """Regression coverage for the write-up figure and timing scripts."""
 
+import importlib.util
+import math
 from pathlib import Path
 import sys
 import tempfile
@@ -22,6 +24,8 @@ from paper_figures import (
 )
 from lti_numerics import rigorous_deactivation_horizon
 from lti_solver import LTIVer5Solver
+import problem_generators
+from convex_projection_solver import ConvexProjectionSolver
 
 
 ANALYTIC_FIGURES = (
@@ -129,6 +133,90 @@ class FigureOutputTests(unittest.TestCase):
             finally:
                 paper_figures.OUTPUT_DIR = original
         self.assertEqual(written, [".pdf", ".pdf", ".pdf", ".png", ".png", ".png"])
+
+
+
+BENCHMARK_GROUP = "needs the benchmark dependency group: uv sync --group benchmark"
+HAS_SCIPY = importlib.util.find_spec("scipy") is not None
+HAS_QPSOLVERS = importlib.util.find_spec("qpsolvers") is not None
+
+
+class BoundedTestPlanesTests(unittest.TestCase):
+    def test_a_seed_names_the_problem_the_global_stream_draws(self) -> None:
+        np.random.seed(problem_generators.problem_seed(24, 3))
+        A, b = bounded_problem(24, 6)
+        z = infeasible_start(A, b, 6)
+        expected = problem_generators.problem(24, 6, problem_generators.problem_seed(24, 3))
+        for drawn, seeded in zip((A, b, z), expected):
+            np.testing.assert_array_equal(drawn, seeded)
+
+    def test_the_spanning_rows_bound_the_region_and_the_region_is_nonempty(self) -> None:
+        for num_planes, num_dimensions in ((5, 4), (24, 8), (100, 26)):
+            with self.subTest(size=(num_planes, num_dimensions)):
+                A, b, z = problem_generators.problem(num_planes, num_dimensions, 7)
+                spanning = A[:num_dimensions + 1]
+                # Positive weights of one each sum the spanning rows to zero, and the first
+                # p of them span the space, hence they positively span it
+                np.testing.assert_allclose(spanning.sum(axis=0), 0.0, atol=1e-12)
+                self.assertEqual(np.linalg.matrix_rank(spanning[:-1]), num_dimensions)
+                self.assertAlmostEqual(np.linalg.norm(spanning[-1]), math.sqrt(num_dimensions))
+                inside = ConvexProjectionSolver._find_optimal_solution(z, A, b)
+                self.assertTrue(np.all(A @ inside <= b + 1e-9 * (1.0 + np.abs(b))))
+                self.assertTrue(np.any(A @ z > b))
+
+    def test_too_few_half_spaces_to_bound_the_region_are_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            problem_generators.BoundedTestPlanes(4, 4)
+
+
+class CauchyNormalTests(unittest.TestCase):
+    def test_directions_crowd_the_axes_against_a_uniform_law(self) -> None:
+        # The entries s tan(theta) are standard Cauchy, and the share of directions within
+        # pi/8 of the positive first axis is half of P(|C_2| < tan(pi/8) |C_1|), an integral
+        # over the angle of C_1 evaluated here by the midpoint rule
+        ratio = math.tan(math.pi / 8)
+        angles = (np.arange(200_000) + 0.5) / 200_000 * (math.pi / 2)
+        exact = 0.5 * (2 / math.pi) * np.mean(np.arctan(ratio * np.tan(angles)))
+        rows = problem_generators.cauchy_normals(np.random.RandomState(2026), 200_000, 2)
+        share = np.mean(np.abs(np.arctan2(rows[:, 1], rows[:, 0])) < math.pi / 8)
+        standard_error = math.sqrt(share * (1 - share) / len(rows))
+        self.assertAlmostEqual(exact, 0.16435, places=4)
+        self.assertLess(abs(share - exact), 5 * standard_error)
+        self.assertGreater(share - 0.125, 20 * standard_error)
+
+
+@unittest.skipUnless(HAS_SCIPY, BENCHMARK_GROUP)
+class RandomTestPlanesTests(unittest.TestCase):
+    def test_an_accepted_draw_is_bounded_and_nonempty_by_independent_checks(self) -> None:
+        from scipy.optimize import nnls
+
+        for num_planes, num_dimensions in ((6, 2), (12, 4), (20, 6)):
+            with self.subTest(size=(num_planes, num_dimensions)):
+                generator = problem_generators.RandomTestPlanes(num_planes, num_dimensions)
+                A, b = generator.draw(np.random.RandomState(num_planes))
+                self.assertGreaterEqual(generator.draws_used, 1)
+                # Every coordinate direction and its negative is a nonnegative combination of
+                # the rows exactly when the region is bounded
+                for direction in np.vstack([np.eye(num_dimensions), -np.eye(num_dimensions)]):
+                    _, residual = nnls(A.T, direction)
+                    self.assertLess(residual, 1e-8)
+                z = np.zeros(num_dimensions) + 100.0
+                inside = ConvexProjectionSolver._find_optimal_solution(z, A, b)
+                self.assertTrue(np.all(A @ inside <= b + 1e-8 * (1.0 + np.abs(A) @ np.abs(inside))))
+
+    def test_the_sampler_rejects_draws_and_repeats_under_a_seed(self) -> None:
+        generator = problem_generators.RandomTestPlanes(20, 6)
+        first = generator.draw(np.random.RandomState(1))
+        self.assertGreater(generator.draws_used, 1)
+        second = generator.draw(np.random.RandomState(1))
+        np.testing.assert_array_equal(first[0], second[0])
+        np.testing.assert_array_equal(first[1], second[1])
+
+    def test_an_unbounded_or_empty_region_is_rejected(self) -> None:
+        test = problem_generators.RandomTestPlanes.is_bounded_and_nonempty
+        self.assertFalse(test(np.array([[1.0, 0.0], [0.0, 1.0]]), np.ones(2)))
+        self.assertFalse(test(np.array([[1.0], [-1.0]]), np.array([-1.0, -1.0])))
+        self.assertTrue(test(np.array([[1.0], [-1.0]]), np.array([1.0, 1.0])))
 
 
 if __name__ == "__main__":
