@@ -1,21 +1,24 @@
-"""The two random polyhedron generators of the SIAM paper's supplement, section
-Reproducibility: RandomTestPlanes (Generator 1, rejection sampling) and BoundedTestPlanes
-(Generator 2, direct construction).
+"""The random polyhedra of the SIAM paper and its supplement: the two generators of the
+supplement's section Reproducibility, RandomTestPlanes (Generator 1, rejection sampling) and
+BoundedTestPlanes (Generator 2, direct construction), and the wedge family of the benchmark,
+WedgeTestPlanes, which the supplement's angle sweeps in stall_angles.py also draw.
 
-Each returns constraints A @ x <= b with one row of A per half-space. Neither normalises
+Each class returns constraints A @ x <= b with one row of A per half-space. None normalises
 its rows, because the law of the normals is stated for the rows as drawn, and the last
 spanning row of BoundedTestPlanes, -Q 1, has length sqrt(p). The solvers normalise each row
 and its offset internally, hence only the polyhedron matters to them.
 
-The entries s tan(theta) of both laws, with theta uniform on [0, pi/2) and s a random sign,
+The entries s tan(theta) of the laws of Generators 1 and 2, with theta uniform on [0, pi/2) and s a random sign,
 are standard Cauchy variables. A row of independent Cauchy entries points near a coordinate
 axis more often than a uniformly random direction does, thus the law does not make every
 direction equally likely. tests/test_paper_outputs.py measures the excess at p = 2.
 
-Both generators draw from a random source passed in by the caller. problem() seeds a
-legacy RandomState, whose streams numpy keeps fixed across versions, so that a seed names
-the same problem on every installation.
+Every class draws from a random source passed in by the caller. problem() and the problem
+method of the wedge family seed a legacy RandomState, whose streams numpy keeps fixed across
+versions, so that a seed names the same problem on every installation.
 """
+
+from collections import namedtuple
 
 import numpy as np
 
@@ -24,6 +27,18 @@ import numpy as np
 # each offset clears it by a margin uniform on SLACK_RANGE
 ANCHOR_HALF_WIDTH = 2.0
 SLACK_RANGE = (0.2, 1.5)
+
+# Chosen here: the geometry of the wedge and of the vertex of stall_angles.py, in the units of
+# the coordinates. A corner is uniform on [-CORNER_HALF_WIDTH, CORNER_HALF_WIDTH]^p, a box has
+# half-width BOX_HALF_WIDTH, and a canonical start lies START_DISTANCE from its corner
+START_DISTANCE = 1.0
+BOX_HALF_WIDTH = 1.0
+CORNER_HALF_WIDTH = 1.0
+
+# A member of a family with a known corner: its constraints A x <= b, its corner, the number of
+# corner rows at the top of A, and the unit directions off the wedge's plane as columns, none
+# for a vertex
+Geometry = namedtuple("Geometry", "A b corner corner_rows free_directions")
 
 
 def _matmul(left: np.ndarray, right: np.ndarray) -> np.ndarray:
@@ -37,6 +52,13 @@ def _matmul(left: np.ndarray, right: np.ndarray) -> np.ndarray:
     """
     with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
         return left @ right
+
+
+def haar_rotation(rng, num_dimensions: int) -> np.ndarray:
+    """A Haar-distributed orthogonal matrix, reflections included, drawn as the Q factor of a
+    Gaussian matrix with the signs of the diagonal of R moved into it."""
+    basis, upper = np.linalg.qr(rng.standard_normal((num_dimensions, num_dimensions)))
+    return basis * np.sign(np.diag(upper))
 
 
 def cauchy_normals(rng, num_planes: int, num_dimensions: int) -> np.ndarray:
@@ -102,8 +124,7 @@ class BoundedTestPlanes:
     span the space and therefore bound the polyhedron whatever the other rows are, which
     follow cauchy_normals. The offsets b_i = a_i^T x_bar + sigma_i, with the interior anchor
     x_bar and the margins sigma_i drawn as the module constants describe, keep x_bar strictly
-    inside every half-space. Q is drawn on the whole orthogonal group, reflections included,
-    as the Q factor of a Gaussian matrix with the signs of the diagonal of R moved into it.
+    inside every half-space. Q is drawn by haar_rotation.
     """
 
     def __init__(self, num_planes: int, num_dimensions: int) -> None:
@@ -116,8 +137,7 @@ class BoundedTestPlanes:
         """Draw constraints of a bounded polyhedron with a strictly interior point."""
         p = self.num_dimensions
         spanning = np.vstack([np.eye(p), -np.ones((1, p))])
-        basis, upper = np.linalg.qr(rng.standard_normal((p, p)))
-        A = _matmul(spanning, (basis * np.sign(np.diag(upper))).T)
+        A = _matmul(spanning, haar_rotation(rng, p).T)
 
         extra = self.num_planes - (p + 1)
         if extra > 0:
@@ -125,6 +145,80 @@ class BoundedTestPlanes:
 
         anchor = rng.uniform(-ANCHOR_HALF_WIDTH, ANCHOR_HALF_WIDTH, size=p)
         return A, _matmul(A, anchor) + rng.uniform(*SLACK_RANGE, size=self.num_planes)
+
+
+class WedgeTestPlanes:
+    """The wedge family: two half-spaces whose unit normals (cos(theta/2), +-sin(theta/2), 0,
+    ..., 0) meet at angle theta, as in the article's lem:wedge, and the box
+    |x_j| <= BOX_HALF_WIDTH on each of the remaining p - 2 coordinates.
+
+    The 2 p - 2 rows hold the two wedge rows first. The box keeps the region bounded off the
+    wedge's plane and stays inactive, hence the active normals span only that plane and every
+    episode is singular for p >= 3. The family is built with its corner at the origin, then
+    turned by a Haar-distributed rotation Q and moved to a corner v. Its start is
+    canonical_start's, at START_DISTANCE from the corner, whose projection is known.
+
+    A seed varies the problem through four draws, in the order of the stream: Q, v uniform on
+    [-CORNER_HALF_WIDTH, CORNER_HALF_WIDTH]^p, the weights of the start's direction in the
+    normal cone, and the start's offset along the box directions. theta and p fix everything
+    else, the offsets of A included, which are A v plus BOX_HALF_WIDTH on the box rows.
+    """
+
+    def __init__(self, theta: float, num_dimensions: int) -> None:
+        if num_dimensions < 2:
+            raise ValueError("WedgeTestPlanes needs at least two dimensions.")
+        self.theta = theta
+        self.num_dimensions = num_dimensions
+        self.num_planes = 2 * num_dimensions - 2
+
+    def geometry(self, rng) -> Geometry:
+        """Draw a wedge with its corner and the directions off its plane."""
+        p, theta = self.num_dimensions, self.theta
+        normals = np.zeros((2, p))
+        normals[:, 0] = np.cos(theta / 2)
+        normals[:, 1] = (np.sin(theta / 2), -np.sin(theta / 2))
+        box = np.vstack([np.eye(p)[2:], -np.eye(p)[2:]])
+        rotation = haar_rotation(rng, p)
+        corner = rng.uniform(-CORNER_HALF_WIDTH, CORNER_HALF_WIDTH, size=p)
+        A = _matmul(np.vstack([normals, box]), rotation.T)
+        b = _matmul(A, corner) + np.concatenate([np.zeros(2), np.full(len(box), BOX_HALF_WIDTH)])
+        return Geometry(A, b, corner, 2, rotation[:, 2:])
+
+    def draw(self, rng) -> tuple[np.ndarray, np.ndarray]:
+        """Draw the constraints of a wedge."""
+        geometry = self.geometry(rng)
+        return geometry.A, geometry.b
+
+    def problem(self, seed: int) -> tuple:
+        """A wedge and its canonical start, drawn from one seeded stream. Returns (A, b, z)."""
+        rng = np.random.RandomState(seed)
+        geometry = self.geometry(rng)
+        z, _ = canonical_start(geometry, rng)
+        return geometry.A, geometry.b, z
+
+
+def corner_normals(geometry: Geometry) -> np.ndarray:
+    """The unit normals of the corner rows."""
+    rows = geometry.A[:geometry.corner_rows]
+    return rows / np.linalg.norm(rows, axis=1, keepdims=True)
+
+
+def canonical_start(geometry: Geometry, rng,
+                    distance: float = START_DISTANCE) -> tuple[np.ndarray, np.ndarray]:
+    """A canonical start at distance from the corner, in the units of the coordinates, and its
+    projection.
+
+    The start is the corner plus distance times the normalised combination of the corner
+    normals with weights uniform on the probability simplex, hence the projection is the
+    corner. A wedge start also moves off the plane by an offset uniform in half the box, which
+    the projection keeps.
+    """
+    normals = corner_normals(geometry)
+    direction = rng.dirichlet(np.ones(len(normals))) @ normals
+    free = geometry.free_directions.shape[1]
+    reference = geometry.corner + geometry.free_directions @ rng.uniform(
+        -BOX_HALF_WIDTH / 2, BOX_HALF_WIDTH / 2, size=free)
+    return reference + distance * direction / np.linalg.norm(direction), reference
 
 
 def infeasible_start(A: np.ndarray, b: np.ndarray, rng) -> np.ndarray:

@@ -8,25 +8,24 @@ study alone. The figures and CSV files go to results/paper at the repository roo
 numbers the supplement quotes are printed at the end. Plain Dykstra runs through stall_grid.run_batch, with the stall
 detectors and the converged threshold of stall_grid.py.
 
-The supplement does not define either family, and this module defines both. Each is built with
-its corner at the origin, then turned by a Haar-distributed rotation Q and moved to a corner v
-drawn uniformly from [-CORNER_HALF_WIDTH, CORNER_HALF_WIDTH]^p. The corner rows come first.
+The supplement does not define either family. Each is built with its corner at the origin, then
+turned by a Haar-distributed rotation Q and moved to a corner v drawn uniformly from
+[-CORNER_HALF_WIDTH, CORNER_HALF_WIDTH]^p. The corner rows come first.
 
-- wedge: two half-spaces whose unit normals (cos(theta/2), +-sin(theta/2), 0, ..., 0) meet at
-  angle theta, as in the article's lem:wedge, and the box |x_j| <= BOX_HALF_WIDTH on each of the
-  remaining p - 2 coordinates, 2 + 2 (p - 2) rows in all. The box keeps the region bounded off
-  the wedge's plane and stays inactive, hence the active normals span only that plane and every
-  episode is singular for p >= 3.
-- vertex: p half-spaces through one point whose unit normals cos(alpha) u + sin(alpha) w_i lie
-  around the axis u = (1, ..., 1) / sqrt(p), where the w_i are the vertices of a regular simplex
-  orthogonal to u. alpha is set so that every two normals meet at angle theta, which is then the
-  smallest angle between them, as for the wedge. The normals span R^p, the full-rank branch.
+- wedge: problem_generators.WedgeTestPlanes, two half-spaces whose unit normals meet at angle
+  theta and a box on the remaining p - 2 coordinates, the family the benchmark also runs.
+- vertex: defined here, p half-spaces through one point whose unit normals
+  cos(alpha) u + sin(alpha) w_i lie around the axis u = (1, ..., 1) / sqrt(p), where the w_i are
+  the vertices of a regular simplex orthogonal to u. alpha is set so that every two normals meet
+  at angle theta, which is then the smallest angle between them, as for the wedge. The normals
+  span R^p, the full-rank branch.
 
-A canonical start is the corner plus START_DISTANCE times a unit direction in the corner's
-normal cone, the normalised combination of the corner normals with weights uniform on the
-probability simplex. The projection is then the corner by construction, and every corner row is
-active at the limit. A wedge start also moves off the plane by an offset uniform in half the box,
-which the projection keeps. The problems of one cell differ in Q, v, the weights, and the offset.
+A canonical start is problem_generators.canonical_start's, the corner plus START_DISTANCE times
+a unit direction in the corner's normal cone, the normalised combination of the corner normals
+with weights uniform on the probability simplex. The projection is then the corner by
+construction, and every corner row is active at the limit. A wedge start also moves off the
+plane by an offset uniform in half the box, which the projection keeps. The problems of one cell
+differ in Q, v, the weights, and the offset.
 
 A corner-approaching start is the corner plus START_DISTANCE times a uniformly random unit
 direction, redrawn until it lies outside at least one corner half-space. It is captured when its
@@ -39,7 +38,6 @@ import argparse
 import sys
 import tempfile
 import time
-from collections import namedtuple
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
@@ -55,6 +53,11 @@ from dykstra.paper_figures import (BLUE, GREY, INK, RED, quiet_accelerate_warnin
                                    style_axes)
 from dykstra.convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
 from dykstra.lti_solver import LTIVer5Solver
+# the geometry shared with the benchmark lives in problem_generators, and the names stay
+# importable from here
+from dykstra.problem_generators import (BOX_HALF_WIDTH, CORNER_HALF_WIDTH, START_DISTANCE,
+                                        Geometry, WedgeTestPlanes, canonical_start,
+                                        corner_normals, haar_rotation)
 from dykstra.stall_grid import CONVERGED_SQUARED_ERROR, run_batch, summarise_runs, write_records
 
 
@@ -66,11 +69,6 @@ FAMILIES = ("wedge", "vertex")
 ANGLE_PROBLEMS = 40
 ANGLE_HORIZON = 5000
 CAPTURE_SAMPLES = 2000
-
-# Chosen here: the geometry of both families, in the units of the coordinates
-START_DISTANCE = 1.0
-BOX_HALF_WIDTH = 1.0
-CORNER_HALF_WIDTH = 1.0
 
 # Chosen here: corner-approaching starts per angle for the fit of the capture exponent, which
 # needs no Dykstra run
@@ -99,10 +97,6 @@ QUICK_ANGLE_INDICES, QUICK_PROBLEMS, QUICK_HORIZON = (6, 8), 3, 300
 QUICK_SAMPLES, QUICK_SAMPLES_FIT = 200, 2000
 QUICK_ACCELERATED_INDICES, QUICK_ACCELERATED_PROBLEMS, QUICK_CAP = (0, 1), 2, 2000
 
-# A family member: its constraints A x <= b, its corner, the number of corner rows at the top of
-# A, and the unit directions off the wedge's plane as columns, none for a vertex
-Geometry = namedtuple("Geometry", "A b corner corner_rows free_directions")
-
 STYLES = {("wedge", 3): (BLUE, "-"), ("wedge", 8): (BLUE, "--"),
           ("vertex", 3): (RED, "-"), ("vertex", 8): (RED, "--")}
 
@@ -114,24 +108,9 @@ def seed(study: int, family: str, num_dimensions: int, angle_index: int, index: 
             + 1000 * num_dimensions + 100 * angle_index + index)
 
 
-def haar_rotation(rng, num_dimensions: int) -> np.ndarray:
-    """A Haar-distributed orthogonal matrix, drawn as in BoundedTestPlanes."""
-    basis, upper = np.linalg.qr(rng.standard_normal((num_dimensions, num_dimensions)))
-    return basis * np.sign(np.diag(upper))
-
-
 def wedge(theta: float, num_dimensions: int, rng) -> Geometry:
     """A wedge of angle theta, in rad, with its box, rotated and moved by rng."""
-    p = num_dimensions
-    normals = np.zeros((2, p))
-    normals[:, 0] = np.cos(theta / 2)
-    normals[:, 1] = (np.sin(theta / 2), -np.sin(theta / 2))
-    box = np.vstack([np.eye(p)[2:], -np.eye(p)[2:]])
-    rotation = haar_rotation(rng, p)
-    corner = rng.uniform(-CORNER_HALF_WIDTH, CORNER_HALF_WIDTH, size=p)
-    A = np.vstack([normals, box]) @ rotation.T
-    b = A @ corner + np.concatenate([np.zeros(2), np.full(len(box), BOX_HALF_WIDTH)])
-    return Geometry(A, b, corner, 2, rotation[:, 2:])
+    return WedgeTestPlanes(theta, num_dimensions).geometry(rng)
 
 
 def vertex(theta: float, num_dimensions: int, rng) -> Geometry:
@@ -150,24 +129,6 @@ def vertex(theta: float, num_dimensions: int, rng) -> Geometry:
 
 
 BUILDERS = {"wedge": wedge, "vertex": vertex}
-
-
-def corner_normals(geometry: Geometry) -> np.ndarray:
-    """The unit normals of the corner rows."""
-    rows = geometry.A[:geometry.corner_rows]
-    return rows / np.linalg.norm(rows, axis=1, keepdims=True)
-
-
-def canonical_start(geometry: Geometry, rng,
-                    distance: float = START_DISTANCE) -> tuple[np.ndarray, np.ndarray]:
-    """A canonical start at distance from the corner, in the units of the coordinates, and its
-    projection."""
-    normals = corner_normals(geometry)
-    direction = rng.dirichlet(np.ones(len(normals))) @ normals
-    free = geometry.free_directions.shape[1]
-    reference = geometry.corner + geometry.free_directions @ rng.uniform(
-        -BOX_HALF_WIDTH / 2, BOX_HALF_WIDTH / 2, size=free)
-    return reference + distance * direction / np.linalg.norm(direction), reference
 
 
 def approaching_starts(geometry: Geometry, count: int, rng) -> tuple:
