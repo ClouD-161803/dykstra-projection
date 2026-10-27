@@ -409,7 +409,7 @@ def main() -> None:
     args = parser.parse_args()
     implementations = ("c", "python") if args.implementation == "both" else (args.implementation,)
     quiet_accelerate_warnings()
-    command = "python performance_timing.py " + " ".join(sys.argv[1:])
+    command = " ".join(["python performance_timing.py", *sys.argv[1:]])
     if args.from_csv:
         print_method()
         records = read_records(os.path.join(paper_figures.OUTPUT_DIR, "performance_timing.csv"))

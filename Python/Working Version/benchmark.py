@@ -390,7 +390,7 @@ def main() -> None:
     args = parser.parse_args()
     quiet_accelerate_warnings()
     run(TIERS[:args.tiers], args.seeds, not args.no_oracle,
-        "python benchmark.py " + " ".join(sys.argv[1:]))
+        " ".join(["python benchmark.py", *sys.argv[1:]]))
 
 
 if __name__ == "__main__":
