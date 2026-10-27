@@ -282,3 +282,175 @@ def problem_list(tiers: tuple, seeds: int, wedge_cells: tuple, wedge_problems: i
     problems += [("wedge", 2 * p - 2, p, theta, index, wedge_seed(p, theta, index))
                  for p, theta in wedge_cells for index in range(wedge_problems)]
     return problems
+
+
+def derived(record: dict) -> dict:
+    """The quantities of the cost model for one problem."""
+    episodes = record["count_episodes"]
+    exact = record["count_exact_cycles"]
+    covered = record["count_evaluated_cycles"] + record["count_skipped_cycles"]
+    c_cycle, python_cycle = record["c_dykstra_seconds_per_cycle"], record["python_dykstra_seconds_per_cycle"]
+    c_episode = (record["c_seconds"] - record["c_call_seconds"]
+                 - c_cycle * record["c_exact_cycles"]) / record["c_exact_cycles"]
+    python_episode = (record["python_seconds"] - python_cycle * exact) / episodes
+    stage = {name: record[f"seconds_{name}"] / episodes for name in STAGES}
+    return {
+        "c_us_per_cycle": 1e6 * c_cycle, "python_us_per_cycle": 1e6 * python_cycle,
+        "episodes": episodes, "exact_cycles": exact,
+        "evaluated_cycles": record["count_evaluated_cycles"],
+        "skipped_cycles": record["count_skipped_cycles"],
+        "kkt_attempts": record["count_kkt_attempts"],
+        "cycles_per_episode": covered / episodes,
+        "python_us_cycle_map": 1e6 * stage["cycle_maps"],
+        "python_us_setup": 1e6 * sum(stage[name] for name in SETUP_STAGES),
+        "python_us_kkt": 1e6 * stage["kkt_test"],
+        "python_us_within": 1e6 * sum(stage[name] for name in WITHIN_STAGES),
+        "python_us_history": 1e6 * stage["history"],
+        "python_us_entry": 1e6 * sum(stage[name] for name in ENTRY_STAGES),
+        "python_us_per_episode": 1e6 * python_episode,
+        "python_ms_per_run": 1e3 * record["python_seconds"],
+        "c_ms_per_call": 1e3 * record["c_seconds"],
+        "c_us_per_episode": 1e6 * c_episode,
+        "c_us_cycle_map": 1e6 * (record["c_one_cycle_seconds"] - record["c_call_seconds"] - c_cycle),
+        "c_us_first_entry": 1e6 * (record["c_two_cycle_seconds"] - record["c_one_cycle_seconds"]),
+        "c_breakeven_cycles": c_episode / c_cycle,
+        "python_breakeven_cycles": python_episode / python_cycle,
+        "python_entry_breakeven_cycles": sum(stage[name] for name in ENTRY_STAGES) / python_cycle,
+        "dykstra_cycles_to_tolerance": record["dykstra_cycles_to_tolerance"],
+        "settle_cycle": record["python_settled_at"] if record["python_settled_at"] >= 0 else CAP,
+        "c_speedup": record["c_dykstra_seconds_to_tolerance"] / record["c_seconds"],
+        "python_speedup": python_cycle * record["dykstra_cycles_to_tolerance"] / record["python_seconds"],
+        "dykstra_cycles_to_tight": record["dykstra_cycles_to_tight"],
+        "c_speedup_tight": record["c_dykstra_seconds_to_tight"] / record["c_seconds"],
+        "python_speedup_tight": python_cycle * record["dykstra_cycles_to_tight"] / record["python_seconds"],
+    }
+
+
+SUMMARY_COLUMNS = ("c_us_per_cycle", "python_us_per_cycle", "episodes", "exact_cycles",
+                   "evaluated_cycles", "skipped_cycles", "kkt_attempts", "python_us_cycle_map",
+                   "python_us_setup", "python_us_kkt", "python_us_within", "python_us_history",
+                   "c_ms_per_call",
+                   "c_us_per_episode", "c_breakeven_cycles", "cycles_per_episode")
+EXTRA_COLUMNS = ("python_us_entry", "python_us_per_episode", "python_ms_per_run",
+                 "python_breakeven_cycles", "python_entry_breakeven_cycles", "c_us_cycle_map",
+                 "c_us_first_entry", "dykstra_cycles_to_tolerance", "settle_cycle", "c_speedup",
+                 "python_speedup", "dykstra_cycles_to_tight", "c_speedup_tight",
+                 "python_speedup_tight")
+
+
+def summarise(records: list[dict]) -> list[dict]:
+    """One row per tier and per wedge cell: medians over its problems of every quantity of
+    derived, and the counts that reached the tolerance and settled."""
+    rows = {}
+    for record in records:
+        key = (record["family"], record["n"], record["p"], record["theta"])
+        rows.setdefault(key, []).append(record)
+    summary = []
+    for (family, n, p, theta), group in rows.items():
+        values = [derived(record) for record in group]
+        row = {"family": family, "n": n, "p": p, "theta": theta, "problems": len(group),
+               "dykstra_reached": sum(bool(r["dykstra_reached_tolerance"]) for r in group),
+               "dykstra_reached_tight": sum(bool(r["dykstra_reached_tight"]) for r in group),
+               "settled": sum(r["python_certificate"] == "kkt" for r in group),
+               "c_settled": sum(bool(r["c_settled"]) for r in group)}
+        for column in SUMMARY_COLUMNS + EXTRA_COLUMNS:
+            row[column] = statistics.median(v[column] for v in values)
+        row["episodes_paying_c"] = sum(v["cycles_per_episode"] > v["c_breakeven_cycles"] for v in values)
+        row["runs_paying_c"] = sum(v["c_speedup"] > 1.0 for v in values)
+        row["runs_paying_python"] = sum(v["python_speedup"] > 1.0 for v in values)
+        row["runs_paying_c_tight"] = sum(v["c_speedup_tight"] > 1.0 for v in values)
+        summary.append(row)
+    return summary
+
+
+def fit(stage: str, count: str, seconds: np.ndarray, flops: np.ndarray, counts: np.ndarray) -> dict:
+    """The fit seconds = alpha flops + beta counts in relative least squares, so that the slowest
+    problems do not decide it alone, with its residuals relative to the measured times."""
+    design = np.column_stack([flops, counts]).astype(float)
+    alpha, beta = np.linalg.lstsq(design / seconds[:, None], np.ones(len(seconds)), rcond=None)[0]
+    # a negative coefficient is dropped and the other refitted alone
+    if min(alpha, beta) < 0.0:
+        column = 0 if alpha > beta else 1
+        single = np.linalg.lstsq(design[:, [column]] / seconds[:, None], np.ones(len(seconds)),
+                                 rcond=None)[0][0]
+        alpha, beta = (single, 0.0) if column == 0 else (0.0, single)
+    residual = np.abs(design @ np.array([alpha, beta]) / seconds - 1.0)
+    return {"stage": stage, "count": count, "problems": len(seconds), "ns_per_flop": 1e9 * alpha,
+            "gflops": 1e-9 / alpha if alpha > 0 else 0.0, "us_per_count": 1e6 * beta,
+            "median_relative_residual": float(np.median(residual)),
+            "largest_relative_residual": float(np.max(residual))}
+
+
+def fit_stages(records: list[dict]) -> list[dict]:
+    """For every profiled stage, the fit of its time to its flops and its count over the problems
+    that ran it, then the fit of a Dykstra cycle to its flops and half-spaces in Python and C."""
+    fits = []
+    for stage in STAGES[:-1]:
+        count = FIT_COUNT.get(stage, f"entries_{stage}")
+        used = [r for r in records if r[f"seconds_{stage}"] > 0.0 and r[f"flops_{stage}"] > 0]
+        if len(used) >= 3:
+            fits.append(fit(stage, count.replace(f"_{stage}", ""),
+                            np.array([r[f"seconds_{stage}"] for r in used]),
+                            np.array([r[f"flops_{stage}"] for r in used]),
+                            np.array([r[count] for r in used])))
+    for implementation, flops in (("python", 6), ("c", 3)):
+        used = [r for r in records if r[f"{implementation}_dykstra_seconds_per_cycle"] > 0.0]
+        if len(used) >= 3:
+            fits.append(fit(f"dykstra_cycle_{implementation}", "half-spaces",
+                            np.array([r[f"{implementation}_dykstra_seconds_per_cycle"] for r in used]),
+                            np.array([flops * r["n"] * r["p"] for r in used]),
+                            np.array([r["n"] for r in used])))
+    return fits
+
+
+def number(value: float) -> str:
+    """Three significant figures, whole numbers from 100 up."""
+    if value >= 100 or value == int(value):
+        return f"{value:.0f}"
+    return f"{value:.3g}"
+
+
+def table_rows(summary: list[dict]) -> str:
+    """Rows of tab:cost-model, one per tier and per wedge cell."""
+    lines = []
+    for row in summary:
+        if row["family"] == "tier":
+            label = f"${row['n']} \\times {row['p']}$"
+        else:
+            label = f"wedge, $p = {row['p']}$, $\\theta = {row['theta']:g}$"
+        cells = [number(row[column]) for column in SUMMARY_COLUMNS]
+        lines.append(f"  {label:<34} & " + " & ".join(f"${cell}$" for cell in cells) + r" \\")
+    return "\n".join(lines) + "\n"
+
+
+def table_header(summary: list[dict]) -> str:
+    """The LaTeX comment that names every column of tab:cost-model and its source."""
+    counts = "; ".join(f"{row['n']} x {row['p']}" + (f" theta {row['theta']:g}" if row["family"] == "wedge" else "")
+                       + f": Dykstra reached {row['dykstra_reached']}/{row['problems']}, settled "
+                       f"{row['settled']}/{row['problems']} in Python and {row['c_settled']}/{row['problems']} in C, "
+                       f"Dykstra reached {TIGHT_TOLERANCE:g} {row['dykstra_reached_tight']}/{row['problems']}"
+                       for row in summary)
+    return ("% an episode is the paper's phase. medians over the problems of each row, every "
+            "time the median of at least "
+            f"{REPEATS} runs, budget cap {CAP} cycles\n"
+            "% columns: problem; Dykstra us per cycle in C; Dykstra us per cycle in Python; "
+            "episodes; exact cycles; evaluated cycles; skipped cycles; KKT tests; Python us per "
+            "episode in the cycle map, the setup (resolvent, closed-form setup and deflation), the "
+            "KKT test, the cycles within the episode (evaluation, jumps and fast-forwards), and the "
+            "history, the limit written into the rows after a settlement included; C ms "
+            "per call; C us per episode, inferred as (call - fixed call cost - Dykstra cycle x exact "
+            "cycles) / episodes; that cost in C Dykstra cycles, the break-even; cycles covered per "
+            "episode beyond its exact cycle\n"
+            f"% {counts}\n")
+
+
+def write_csv(rows: list[dict], name: str) -> str:
+    """Write rows as CSV in the output folder and return the path."""
+    os.makedirs(paper_figures.OUTPUT_DIR, exist_ok=True)
+    path = os.path.join(paper_figures.OUTPUT_DIR, name + ".csv")
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Wrote {path}")
+    return path
