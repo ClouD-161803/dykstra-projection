@@ -32,6 +32,12 @@ squared error to the quadprog projection repeats the previous cycle's, by either
 A cycle whose squared error is below CONVERGED_SQUARED_ERROR is converged and counts as neither,
 as _track_error treats min_error. A stalling period is also an approximate stall, since a state
 that does not move repeats its error.
+
+For the article's fig:stallfreq, drawn with pgfplots, the script also writes grids with one row
+per n and one column per p, each as CSV: the stalling-period percentages and counts, the
+approximate-stall percentages of both rules, the relative approximate-stall grid minus the
+stalling-period grid, and the median length of a stalling period. The three percentage grids are
+also written as fig-stallgrid-*.tex matrix plots.
 """
 
 import argparse
@@ -51,7 +57,8 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 
 from dykstra import paper_figures
-from dykstra.paper_figures import GRID, INK, RED, quiet_accelerate_warnings, save_figure
+from dykstra.paper_figures import (GRID, INK, RED, quiet_accelerate_warnings, save_figure,
+                                   save_tex, tex_number)
 from dykstra.convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
 from dykstra.lti_numerics import cycle_map, is_frozen, rounding_floor, unit_constraints
 from dykstra.problem_generators import problem
@@ -90,11 +97,17 @@ CANDIDATE_MOTION = 1e-8
 DETECTORS = ("absolute", "relative")
 RULES = ("relative", "decimals")
 
-# Chosen here: the figures draw the stalling periods of the relative detector, which tests
-# stationarity to rounding as def:frozen asks, and the approximate stalls of the decimals rule,
-# the repetition "on the rounding grid" of the article's def:plateau. The relative rule flags
-# almost only stalling periods and would repeat the first heat map
+# Chosen here: the heat maps draw the stalling periods of the relative detector, which tests
+# stationarity to rounding as def:frozen asks, and the approximate stalls of the decimals rule
+# of the old figure. The relative rule flags almost only stalling periods and would repeat the
+# first heat map
 FIGURE_DETECTOR, FIGURE_RULE = "relative", "decimals"
+
+# The pgfplots grids of fig:stallfreq take the relative rule, the definition of def:plateau, and
+# keep the decimals rule in files named tendecimal
+PGFPLOTS_GRIDS = (("stationary", "stalling_cycles_relative"),
+                  ("approximate", "approximate_cycles_relative"),
+                  ("approximate_tendecimal", "approximate_cycles_decimals"))
 
 # Chosen here: processes of the full run
 WORKERS = 8
@@ -153,7 +166,8 @@ def run_batch(z: np.ndarray, A: np.ndarray, b: np.ndarray, reference: np.ndarray
     visit is that of lti_numerics.exact_cycle, vectorised over the batch. Returns per-problem
     arrays: the unit normals, the squared errors of cycles 0 to horizon, and for each stalling
     detector the number of stalling cycles, the length and active set of the longest stalling
-    period, and the number of stalling cycles left out as converged.
+    period, the number of stalling cycles left out as converged, and, under the key
+    f"{detector}_period_lengths", a list per problem of the lengths of its stalling periods.
     """
     batch, n, p = A.shape
     unit_A, unit_b = np.empty((batch, n, p)), np.empty((batch, n))
@@ -168,7 +182,8 @@ def run_batch(z: np.ndarray, A: np.ndarray, b: np.ndarray, reference: np.ndarray
     stats = {d: {"cycles": np.zeros(batch, dtype=int), "run": np.zeros(batch, dtype=int),
                  "longest": np.zeros(batch, dtype=int),
                  "longest_set": np.zeros((batch, n), dtype=bool),
-                 "excluded": np.zeros(batch, dtype=int)} for d in DETECTORS}
+                 "excluded": np.zeros(batch, dtype=int),
+                 "period_lengths": [[] for _ in range(batch)]} for d in DETECTORS}
     caches = [dict() for _ in range(batch)]
 
     for cycle in range(1, horizon + 1):
@@ -202,6 +217,8 @@ def run_batch(z: np.ndarray, A: np.ndarray, b: np.ndarray, reference: np.ndarray
             record["excluded"] += flag & converged
             flag = flag & ~converged
             record["cycles"] += flag
+            for i in np.flatnonzero(~flag & (record["run"] > 0)):
+                record["period_lengths"][i].append(int(record["run"][i]))
             record["run"] = np.where(flag, record["run"] + 1, 0)
             longer = record["run"] > record["longest"]
             record["longest"][longer] = record["run"][longer]
@@ -211,7 +228,10 @@ def run_batch(z: np.ndarray, A: np.ndarray, b: np.ndarray, reference: np.ndarray
 
     result = {"errors": errors, "unit_A": unit_A}
     for detector, record in stats.items():
-        for key in ("cycles", "longest", "longest_set", "excluded"):
+        # a period still running at the horizon is counted with the cycles it has had
+        for i in np.flatnonzero(record["run"] > 0):
+            record["period_lengths"][i].append(int(record["run"][i]))
+        for key in ("cycles", "longest", "longest_set", "excluded", "period_lengths"):
             result[f"{detector}_{key}"] = record[key]
     return result
 
@@ -290,6 +310,10 @@ def grid_cell(num_planes: int, num_dimensions: int, problems: int, horizon: int)
                        "seconds_per_problem": seconds / problems})
         if i == 0:
             record.update(check)
+        # kept out of summarise_runs, whose records stall_angles.py writes as well
+        for detector in DETECTORS:
+            lengths = batch[f"{detector}_period_lengths"][i]
+            record[f"period_lengths_{detector}"] = " ".join(str(length) for length in lengths)
     return records
 
 
@@ -339,6 +363,69 @@ def write_grid_csv(grid: np.ndarray, half_spaces: tuple, dimensions: tuple, name
             writer.writerow([p, *("" if np.isnan(v) else f"{v:.0f}" for v in row)])
     print(f"Wrote {path}")
     return path
+
+
+def n_by_p_grid(records: list[dict], half_spaces: tuple, dimensions: tuple,
+                statistic) -> np.ndarray:
+    """statistic of each cell's records, one row per n and one column per p, NaN outside the grid."""
+    grid = np.full((len(half_spaces), len(dimensions)), np.nan)
+    for row, n in enumerate(half_spaces):
+        for column, p in enumerate(dimensions):
+            cell = [r for r in records if r["n"] == n and r["p"] == p]
+            if cell:
+                grid[row, column] = statistic(cell)
+    return grid
+
+
+def share_of(field: str):
+    """The statistic giving the percentage of a cell's records whose field is nonzero."""
+    return lambda cell: 100.0 * sum(bool(r[field]) for r in cell) / len(cell)
+
+
+def count_of(field: str):
+    """The statistic giving the number of a cell's records whose field is nonzero."""
+    return lambda cell: float(sum(bool(r[field]) for r in cell))
+
+
+def pooled_lengths(cell: list[dict]) -> list[int]:
+    """Lengths of every stalling period of the relative detector in a cell's records."""
+    return [int(length) for r in cell for length in r["period_lengths_relative"].split()]
+
+
+def median_period_length(cell: list[dict]) -> float:
+    """Median length of the stalling periods of a cell's records, NaN if it has none."""
+    lengths = pooled_lengths(cell)
+    return float(np.median(lengths)) if lengths else np.nan
+
+
+def write_n_by_p_csv(grid: np.ndarray, half_spaces: tuple, dimensions: tuple, name: str) -> str:
+    """Write a grid of n_by_p_grid, blank outside the grid, and return the path."""
+    os.makedirs(paper_figures.OUTPUT_DIR, exist_ok=True)
+    path = os.path.join(paper_figures.OUTPUT_DIR, name + ".csv")
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["n/p", *dimensions])
+        for n, row in zip(half_spaces, grid):
+            writer.writerow([n, *("" if np.isnan(v) else tex_number(v, 2) for v in row)])
+    print(f"Wrote {path}")
+    return path
+
+
+def matrix_plot_pgfplots(grid: np.ndarray, half_spaces: tuple, dimensions: tuple,
+                         description: str) -> str:
+    """A pgfplots matrix plot of a grid of n_by_p_grid, for pasting into an axis."""
+    # a matrix plot needs every cell of the lattice, hence a cell outside the grid is nan
+    # rather than left out, and unbounded coords=jump leaves it empty
+    scanlines = ["\n".join(f"{p} {n} {'nan' if np.isnan(v) else tex_number(v, 2)}"
+                           for p, v in zip(dimensions, row))
+                 for n, row in zip(half_spaces, grid)]
+    return (f"% {description}\n"
+            "% x is p, y is n, and meta is the percentage. A cell with n < p + 1 is not part of\n"
+            "% the grid and is written as nan, which unbounded coords=jump leaves empty. Each\n"
+            "% scanline holds one n, and both axes in log mode give cells of nearly equal size\n"
+            "\\addplot[matrix plot*, point meta=explicit, unbounded coords=jump]\n"
+            "  table[x=p, y=n, meta=value] {\n"
+            "p n value\n" + "\n\n".join(scanlines) + "\n};\n")
 
 
 def write_records(records: list[dict], name: str) -> str:
@@ -449,6 +536,60 @@ def report(records: list[dict], half_spaces: tuple, dimensions: tuple,
     numbers["seconds_per_problem"] = float(np.mean(seconds))
     print(f"batch run time per problem: mean {np.mean(seconds):.3f} s, largest cell "
           f"{max(seconds):.3f} s")
+    numbers.update(report_stallfreq(records, half_spaces, dimensions, horizon))
+    return numbers
+
+
+def report_stallfreq(records: list[dict], half_spaces: tuple, dimensions: tuple,
+                     horizon: int) -> dict:
+    """Write the n-by-p grids and matrix plots of fig:stallfreq, print their numbers, return them."""
+    shape = (half_spaces, dimensions)
+    total, cells = len(records), len(grid_cells(*shape))
+    per_cell = total // cells
+    descriptions = {
+        "stationary": "a stalling period (relative detector)",
+        "approximate": f"an approximate stall, the squared error of consecutive cycles repeating to "
+                       f"{ConvexProjectionSolver.RELATIVE_TOLERANCE:g} of the larger",
+        "approximate_tendecimal": f"an approximate stall, the squared error of consecutive cycles "
+                                  f"repeating once rounded to {REPEAT_DECIMALS} decimal places",
+    }
+    grids = {}
+    for label, field in PGFPLOTS_GRIDS:
+        grids[label] = n_by_p_grid(records, *shape, share_of(field))
+        write_n_by_p_csv(grids[label], *shape, f"stall_grid_{label}_percent")
+        description = (f"Percentage of the {per_cell} problems per cell with "
+                       f"{descriptions[label]}, over a budget of {horizon} cycles")
+        save_tex(matrix_plot_pgfplots(grids[label], *shape, description),
+                 "fig-stallgrid-" + label.replace("_", "-"), "python -m dykstra.stall_grid")
+    counts = n_by_p_grid(records, *shape, count_of("stalling_cycles_relative"))
+    write_n_by_p_csv(counts, *shape, "stall_grid_stationary_counts")
+    difference = grids["approximate"] - grids["stationary"]
+    write_n_by_p_csv(difference, *shape, "stall_grid_approximate_minus_stationary")
+    medians = n_by_p_grid(records, *shape, median_period_length)
+    write_n_by_p_csv(medians, *shape, "stall_grid_median_period_length")
+
+    flagged = {label: sum(1 for r in records if r[field]) for label, field in PGFPLOTS_GRIDS}
+    absolute = np.abs(difference[~np.isnan(difference)])
+    row, column = np.unravel_index(np.nanargmax(np.abs(difference)), difference.shape)
+    lengths = pooled_lengths(records)
+    numbers = {"stallfreq_counts": flagged,
+               "stallfreq_largest_difference": float(absolute.max()),
+               "stallfreq_mean_difference": float(absolute.mean()),
+               "stallfreq_median_period": float(np.median(lengths)) if lengths else None,
+               "stallfreq_periods": len(lengths)}
+    print(f"fig:stallfreq, {total} problems in {cells} cells of {per_cell}: "
+          f"{flagged['stationary']} with a stalling period (relative detector), "
+          f"{flagged['approximate']} with an approximate stall under the relative rule "
+          f"(RELATIVE_TOLERANCE {ConvexProjectionSolver.RELATIVE_TOLERANCE:g}), and "
+          f"{flagged['approximate_tendecimal']} under the {REPEAT_DECIMALS}-decimal rule")
+    print(f"relative approximate-stall grid minus stalling-period grid: largest absolute "
+          f"difference {absolute.max():.0f} percentage points, at {half_spaces[row]} x "
+          f"{dimensions[column]}, mean absolute difference {absolute.mean():.2f} points over "
+          f"{absolute.size} cells, {int(np.count_nonzero(absolute))} cells differ")
+    if lengths:
+        print(f"stalling periods (relative detector): {len(lengths)} in {flagged['stationary']} "
+              f"problems, median length {np.median(lengths):g} cycles, per-cell medians from "
+              f"{np.nanmin(medians):g} to {np.nanmax(medians):g}")
     return numbers
 
 
@@ -469,8 +610,8 @@ def main() -> None:
     records = run_grid(*shape, problems, horizon, args.workers)
     report(records, *shape, horizon)
     print(f"Finished in {time.perf_counter() - began:.0f} s: stall_grid_frozen and "
-          f"stall_grid_plateau as PNG and PDF, and the stall_grid CSV files, in "
-          f"{paper_figures.OUTPUT_DIR}")
+          f"stall_grid_plateau as PNG and PDF, the three fig-stallgrid-*.tex matrix plots, and "
+          f"the stall_grid CSV files, in {paper_figures.OUTPUT_DIR}")
 
 
 if __name__ == "__main__":
