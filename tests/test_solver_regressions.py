@@ -22,6 +22,8 @@ FAST_FORWARD_LOG = re.compile(
 
 BOX_A = np.array([[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0]])
 BOX_B = np.ones(4)
+BOX_LINE_A = np.vstack([BOX_A, [[0.5, 1.0], [-0.5, -1.0]]])
+BOX_LINE_B = np.hstack([BOX_B, [1.0, -1.0]])
 
 
 class SolverRegressionTests(unittest.TestCase):
@@ -163,6 +165,20 @@ class SolverRegressionTests(unittest.TestCase):
 
         self.assertEqual(jumps, [])
         self._assert_matches_plain_dykstra(fast, jumps, z, A, b, max_iter=40)
+
+    def test_squared_errors_keep_their_value_at_small_scales(self) -> None:
+        """The box and line from (-2, 1.4), scaled by 1e-6, starts at squared error
+        4.16e-12. Rounding each squared error to ten decimals stored it as zero, and every
+        cycle was classified as converged however small min_error was."""
+        scale = 1e-6
+        result = DykstraProjectionSolver(
+            scale * np.array([-2.0, 1.4]), BOX_LINE_A, scale * BOX_LINE_B, 10,
+            track_error=True, min_error=1e-3 * scale ** 2,
+        ).solve()
+
+        self.assertAlmostEqual(result.squared_errors[0] / scale ** 2, 4.16, places=9)
+        self.assertAlmostEqual(result.squared_errors[7] / scale ** 2, 0.512, places=9)
+        self.assertFalse((~np.isnan(result.converged_errors)).any())
 
 
 if __name__ == "__main__":
