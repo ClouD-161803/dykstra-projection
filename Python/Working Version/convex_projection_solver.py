@@ -98,13 +98,28 @@ class ConvexProjectionSolver(ABC):
             np.ndarray: Projected point.
         """
         unit_normal, constant_offset = ConvexProjectionSolver._normalise(normal, offset)
+        return ConvexProjectionSolver._project_onto_unit_half_space(
+            point, unit_normal, constant_offset)
 
+    @staticmethod
+    def _project_onto_unit_half_space(point: np.ndarray, unit_normal: np.ndarray,
+                                      constant_offset: np.ndarray) -> np.ndarray:
+        """
+        Projects a point onto a single half space whose normal and offset have already
+        been normalised, as _normalise returns them.
+
+        Args:
+            point: Point to project.
+            unit_normal: *Unit* normal vector of the half space.
+            constant_offset: *Normalised* offset of the half space.
+
+        Returns:
+            np.ndarray: The point itself if it lies in the half space, else its
+            projection onto the boundary.
+        """
         if ConvexProjectionSolver._is_in_half_space(point, unit_normal, constant_offset):
             return point
-        else:
-            boundary_projection = (point - (np.dot(point, unit_normal)
-                                            - constant_offset) * unit_normal)
-            return boundary_projection
+        return point - (np.dot(point, unit_normal) - constant_offset) * unit_normal
 
     @staticmethod
     def _delete_inactive_half_spaces(z: np.ndarray, A: np.ndarray,
@@ -199,7 +214,7 @@ class ConvexProjectionSolver(ABC):
         return actual_projection
 
     @staticmethod
-    def _beta_check(point: np.ndarray, A: np.ndarray, b: np.ndarray) -> int:
+    def _beta_check(point: np.ndarray, unit_constraints: list) -> int:
         """
         Selects a value of beta based on whether the passed point lies
         within the intersection of half-spaces.
@@ -209,14 +224,13 @@ class ConvexProjectionSolver(ABC):
 
         Args:
             point: Point to check.
-            A: Matrix of normal vectors.
-            b: Vector of constant offsets.
+            unit_constraints: Pairs of a unit normal and its normalised offset, as
+                _normalise returns them.
 
         Returns:
             int: 1 if the point is within the intersection, else 0.
         """
-        for normal, offset in zip(A, b):
-            unit_normal, constant_offset = ConvexProjectionSolver._normalise(normal, offset)
+        for unit_normal, constant_offset in unit_constraints:
             terms = point * unit_normal
             tolerance = ConvexProjectionSolver.RELATIVE_TOLERANCE * (
                 np.abs(terms).sum() + abs(constant_offset))
@@ -268,6 +282,11 @@ class ConvexProjectionSolver(ABC):
         self.plot_active_halfspaces = plot_active_halfspaces
 
         self.n = self.A.shape[0]
+        # The pairs every visit projects with, normalised once. They come from _normalise row
+        # by row, since np.linalg.norm along axis 1 sums the squares in another order, and
+        # BitwiseReferenceTests in tests/test_stress_core.py hold the outputs to the last bit
+        self.unit_constraints = [self._normalise(normal, offset)
+                                 for normal, offset in zip(self.A, self.b)]
         self.actual_projection = self._find_optimal_solution(self.z, self.A, self.b)
         self._reset_state()
 
@@ -432,15 +451,15 @@ class DykstraProjectionSolver(ConvexProjectionSolver):
         # Main body of Dykstra's algorithm
         for i in range(self.max_iter):
             # Iterate over every half plane
-            for m, (normal, offset) in enumerate(zip(self.A, self.b)):
+            for m, (unit_normal, constant_offset) in enumerate(self.unit_constraints):
                 index = (m - self.n) % self.n
                 x_temp = self.x.copy()
 
-                # Check if current point is in the halfspace
-                self._check_activity(m, i, x_temp, normal, offset, index)
+                self._check_activity(m, i, x_temp, self.A[m], self.b[m], index)
 
                 # Update x_m+1
-                self.x = self._project_onto_half_space(x_temp + self.e[index], normal, offset)
+                self.x = self._project_onto_unit_half_space(x_temp + self.e[index],
+                                                            unit_normal, constant_offset)
 
                 # Update e_m
                 self._update_error(m, x_temp, self.x, index)
@@ -491,7 +510,7 @@ class DykstraMapHybridSolver(ConvexProjectionSolver):
         Args:
             i: Current iteration.
         """
-        beta = self._beta_check(self.x, self.A, self.b)
+        beta = self._beta_check(self.x, self.unit_constraints)
         if beta == 1:
             self.e = self.e_dykstra
         else:
@@ -529,15 +548,15 @@ class DykstraMapHybridSolver(ConvexProjectionSolver):
             self._initialize_iteration(i)
 
             # Iterate over every halfspace
-            for m, (normal, offset) in enumerate(zip(self.A, self.b)):
+            for m, (unit_normal, constant_offset) in enumerate(self.unit_constraints):
                 index = (m - self.n) % self.n
                 x_temp = self.x.copy()
 
-                # Check if current point is in the halfspace
-                self._check_activity(m, i, x_temp, normal, offset, index)
+                self._check_activity(m, i, x_temp, self.A[m], self.b[m], index)
 
                 # Update x_m+1
-                self.x = self._project_onto_half_space(x_temp + self.e[index], normal, offset)
+                self.x = self._project_onto_unit_half_space(x_temp + self.e[index],
+                                                            unit_normal, constant_offset)
 
                 # Update e_m with Dykstra's method
                 self._update_error(m, x_temp, self.x, index)
@@ -588,6 +607,9 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
     def __init__(self, *args, **kwargs):
         """Initialise the stall detection solver with the normalised constraints."""
         super().__init__(*args, **kwargs)
+        # For the rounding floors and the slacks of a stall only. The visits project with
+        # unit_constraints, which can differ in the last bit, since their norms are summed in
+        # another order
         norms = np.linalg.norm(self.A, axis=1)
         self.unit_A = self.A / norms[:, None]
         self.unit_b = self.b / norms
@@ -679,7 +701,8 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
         # beyond rounding.
         for m, (normal, offset) in enumerate(zip(self.A, self.b)):
             self.e[m] = self.e[m] + n_fast_forward * (visits[m - 1] - visits[m])
-            if not self._is_in_half_space(self.x + self.e[(m - self.n) % self.n], normal, offset):
+            if (not self._is_in_half_space(
+                    self.x + self.e[(m - self.n) % self.n], normal, offset)):
                 self.active_half_spaces[m][i] = 1
 
     def solve(self) -> ProjectionResult:
@@ -700,6 +723,7 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
         for i in range(self.max_iter):
             # Iterate over every half plane
             for m, (normal, offset) in enumerate(zip(self.A, self.b)):
+                unit_normal, constant_offset = self.unit_constraints[m]
                 index = (m - self.n) % self.n
                 x_temp = self.x.copy()
 
@@ -714,7 +738,8 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
 
                 # Update x_m+1. Its rounding floor needs e_m before the update.
                 output_floor = self._output_floor(m, x_temp, self.e[index])
-                self.x = self._project_onto_half_space(x_temp + self.e[index], normal, offset)
+                self.x = self._project_onto_unit_half_space(x_temp + self.e[index],
+                                                            unit_normal, constant_offset)
 
                 # Update e_m
                 self._update_error(m, x_temp, self.x, index)
