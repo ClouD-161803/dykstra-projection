@@ -25,6 +25,7 @@ from paper_figures import (
 )
 from lti_numerics import rigorous_deactivation_horizon
 from lti_solver import LTIVer5Solver
+import c_solvers
 import problem_generators
 from convex_projection_solver import ConvexProjectionSolver
 
@@ -292,6 +293,31 @@ class PerformanceErrorTests(unittest.TestCase):
         text = paper_figures.performance_error_pgfplots(curves, 800)
         self.assertIn(f"settle ({curves['settle']})", text)
         self.assertIn(f"({curves['settle']},1e-10)", text)
+
+
+class RunToToleranceTests(unittest.TestCase):
+    def test_a_short_run_writes_the_table_and_the_scaling_panel(self) -> None:
+        implementations = ("python", "c") if c_solvers.libraries_built() else ("python",)
+        with redirected_output() as directory:
+            summaries = performance_timing.run(performance_timing.SMALL_TIERS, 2,
+                                               implementations)
+            written = {path.name for path in directory.iterdir()}
+            records = performance_timing.read_records(str(directory / "performance_timing.csv"))
+            rebuilt = performance_timing.report(records, implementations, "rebuilt")
+        for implementation in implementations:
+            self.assertEqual(performance_timing.table_rows(rebuilt[implementation]),
+                             performance_timing.table_rows(summaries[implementation]))
+        for implementation in implementations:
+            with self.subTest(implementation=implementation):
+                self.assertIn(f"tab-dykvsacc-{implementation}.tex", written)
+                self.assertIn(f"fig-performance-right-{implementation}.tex", written)
+                for summary in summaries[implementation].values():
+                    self.assertLessEqual(summary["accelerated"]["cycles"],
+                                         summary["Dykstra"]["cycles"])
+                    self.assertLessEqual(summary["accelerated"]["cycles"],
+                                         summary["accelerated, certified"]["cycles"])
+                    self.assertGreater(summary["Dykstra"]["seconds"], 0.0)
+        self.assertIn("performance_timing.csv", written)
 
 
 if __name__ == "__main__":
