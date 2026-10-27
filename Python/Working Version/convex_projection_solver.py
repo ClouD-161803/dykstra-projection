@@ -117,9 +117,10 @@ class ConvexProjectionSolver(ABC):
             np.ndarray: The point itself if it lies in the half space, else its
             projection onto the boundary.
         """
-        if ConvexProjectionSolver._is_in_half_space(point, unit_normal, constant_offset):
+        dp = np.dot(point, unit_normal)
+        if dp <= constant_offset:
             return point
-        return point - (np.dot(point, unit_normal) - constant_offset) * unit_normal
+        return point - (dp - constant_offset) * unit_normal
 
     @staticmethod
     def _delete_inactive_half_spaces(z: np.ndarray, A: np.ndarray,
