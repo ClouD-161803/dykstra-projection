@@ -26,6 +26,19 @@ ANCHOR_HALF_WIDTH = 2.0
 SLACK_RANGE = (0.2, 1.5)
 
 
+def _matmul(left: np.ndarray, right: np.ndarray) -> np.ndarray:
+    """Returns left @ right without the spurious floating-point warnings of matmul.
+
+    numpy 2.1.1 linked to Apple's Accelerate raises divide-by-zero, overflow and invalid-value
+    flags from matrix products that are correct. Where convex_projection_solver.py avoids
+    matmul, this function keeps it, since a product written without matmul sums in another
+    order and would change the problem a seed names in the last bit. The factors are finite
+    and far from overflow, hence none of these flags can be genuine.
+    """
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        return left @ right
+
+
 def cauchy_normals(rng, num_planes: int, num_dimensions: int) -> np.ndarray:
     """Rows with entries s tan(theta), theta uniform on [0, pi/2) and s a random sign."""
     angles = rng.uniform(0.0, np.pi / 2, size=(num_planes, num_dimensions))
@@ -104,14 +117,14 @@ class BoundedTestPlanes:
         p = self.num_dimensions
         spanning = np.vstack([np.eye(p), -np.ones((1, p))])
         basis, upper = np.linalg.qr(rng.standard_normal((p, p)))
-        A = spanning @ (basis * np.sign(np.diag(upper))).T
+        A = _matmul(spanning, (basis * np.sign(np.diag(upper))).T)
 
         extra = self.num_planes - (p + 1)
         if extra > 0:
             A = np.vstack([A, cauchy_normals(rng, extra, p)])
 
         anchor = rng.uniform(-ANCHOR_HALF_WIDTH, ANCHOR_HALF_WIDTH, size=p)
-        return A, A @ anchor + rng.uniform(*SLACK_RANGE, size=self.num_planes)
+        return A, _matmul(A, anchor) + rng.uniform(*SLACK_RANGE, size=self.num_planes)
 
 
 def infeasible_start(A: np.ndarray, b: np.ndarray, rng) -> np.ndarray:
@@ -123,7 +136,7 @@ def infeasible_start(A: np.ndarray, b: np.ndarray, rng) -> np.ndarray:
     scale = 4.0
     for _ in range(200):
         candidate = rng.standard_normal(A.shape[1]) * scale
-        if np.any(A @ candidate > b):
+        if np.any(_matmul(A, candidate) > b):
             return candidate
         scale *= 1.5
     raise RuntimeError("No infeasible start found.")
