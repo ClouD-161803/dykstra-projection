@@ -351,19 +351,38 @@ def stall_crossing(y: np.ndarray, delta: np.ndarray, delta_floor: np.ndarray,
 
 def _lawson_hanson(k: int, gradient, solve) -> np.ndarray:
     """Lawson and Hanson's active-set method over l >= 0."""
-    # gradient(l) is minus the gradient of the objective, solve(P) the unconstrained
-    # minimiser on support P; both iteration caps only guard against rounding cycles
+    # gradient(l) is minus the gradient of the objective. solve(P) returns the
+    # unconstrained minimiser on support P and, when the objective has none there but
+    # falls without bound, the direction it falls along. Both iteration caps only guard
+    # against rounding cycles
     lam = np.zeros(k)
     passive = np.zeros(k, dtype=bool)
     for _ in range(3 * k + 10):
         w = gradient(lam)
         if passive.all() or w[~passive].max() <= 0.0:
             break
-        passive[np.argmax(np.where(passive, -np.inf, w))] = True
+        entering = int(np.argmax(np.where(passive, -np.inf, w)))
+        passive[entering] = True
         for _ in range(3 * k + 10):
             support = np.where(passive)[0]
+            minimiser, ray = solve(support)
+            if ray is not None:
+                # The multipliers move along the ray until the first one it lowers
+                # reaches zero, and that row leaves the support. A ray that does not
+                # raise the entering row would leave it at zero, so the minimiser is
+                # stepped towards instead
+                direction = np.zeros(k)
+                direction[support] = ray
+                lowered = support[direction[support] < 0.0]
+                if direction[entering] > 0.0 and lowered.size:
+                    ratios = lam[lowered] / -direction[lowered]
+                    first = int(np.argmin(ratios))
+                    lam = lam + ratios[first] * direction
+                    lam[lowered[first]] = 0.0
+                    passive &= lam > 0.0
+                    continue
             step = np.zeros(k)
-            step[support] = solve(support)
+            step[support] = minimiser
             if np.all(step[support] > 0.0):
                 lam = step
                 break
@@ -386,14 +405,30 @@ def nonnegative_least_squares(C: np.ndarray, d: np.ndarray) -> np.ndarray:
     abs_C = np.abs(C)
     return _lawson_hanson(C.shape[1],
                           lambda lam: C.T @ (d - C @ lam) - rounding_floor(abs_C.T @ (np.abs(d) + abs_C @ lam)),
-                          lambda P: np.linalg.lstsq(C[:, P], d, rcond=None)[0])
+                          lambda P: (np.linalg.lstsq(C[:, P], d, rcond=None)[0], None))
 
 
 def nonnegative_quadratic(H: np.ndarray, c: np.ndarray) -> np.ndarray:
     """min 1/2 l^T H l - c^T l over l >= 0, H positive semidefinite."""
     abs_H = np.abs(H)
-    return _lawson_hanson(len(c), lambda lam: c - H @ lam - rounding_floor(np.abs(c) + abs_H @ lam),
-                          lambda P: np.linalg.lstsq(H[np.ix_(P, P)], c[P], rcond=None)[0])
+
+    def solve(P: np.ndarray) -> tuple:
+        """Minimiser on support P, and the direction of unbounded descent if any."""
+        # Rows of a Gram matrix H = N N^T are dependent whenever there are more of them
+        # than dimensions. The minimum-norm solution of a singular H_P leaves the part of
+        # c_P outside its range as a residual beyond rounding, and the objective falls
+        # without bound along that residual, as H_P maps it to zero. Only the rank least
+        # squares reports tells a singular H_P apart: an ill-conditioned one of full rank
+        # can leave a residual above a componentwise floor that is still rounding
+        H_P, c_P = H[np.ix_(P, P)], c[P]
+        minimiser, _, rank, _ = np.linalg.lstsq(H_P, c_P, rcond=None)
+        if rank < len(P):
+            residual = c_P - H_P @ minimiser
+            if np.any(np.abs(residual) > rounding_floor(np.abs(c_P) + np.abs(H_P) @ np.abs(minimiser))):
+                return minimiser, residual
+        return minimiser, None
+
+    return _lawson_hanson(len(c), lambda lam: c - H @ lam - rounding_floor(np.abs(c) + abs_H @ lam), solve)
 
 
 def _kkt_slack_scale(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray, x: np.ndarray) -> np.ndarray:

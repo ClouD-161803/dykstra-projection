@@ -324,7 +324,7 @@ typedef struct {
     double *fQ, *fR, *fcoef, *fy;
     int *fcol, *fpos, fn;
 
-    double *gram, *qc, *nnw, *nnstep, *nnsol, *nnv, *nnmag, *nnprev;
+    double *gram, *qc, *nnw, *nnstep, *nnsol, *nnv, *nnmag, *nnprev, *nnres;
     int *nnsup;
     unsigned char *nnpass, *nnpprev;
 
@@ -375,9 +375,10 @@ static void reflect(const double *M, int rr, int cc, int j, double tau, double *
  * clearly below numpy's cut, eps * max(r, c), the rank is read off the QR and
  * the minimum-norm solution comes from a second QR of the leading rows.  Only a
  * pivot between the cut and LS_RANK_MARGIN times it leaves the rank to the
- * singular values.  A wide system is solved through its transpose. */
-static void lstsq(accelerated_ws *w, const double *A, int r, int c,
-                  const double *b, double *x)
+ * singular values.  A wide system is solved through its transpose.  Returns the
+ * rank the solution was computed with, as numpy reports it. */
+static int lstsq(accelerated_ws *w, const double *A, int r, int c,
+                 const double *b, double *x)
 {
     const int tall = (r >= c);
     const int rr = tall ? r : c, cc = tall ? c : r;
@@ -385,7 +386,7 @@ static void lstsq(accelerated_ws *w, const double *A, int r, int c,
     int *perm = w->lsperm;
 
     for (int k = 0; k < c; ++k) x[k] = 0.0;
-    if (cc == 0) return;
+    if (cc == 0) return 0;
 
     for (int i = 0; i < rr; ++i)
         for (int j = 0; j < cc; ++j)
@@ -431,7 +432,7 @@ static void lstsq(accelerated_ws *w, const double *A, int r, int c,
             y[j] = s / M[(size_t)j * cc + j];
         }
         for (int j = 0; j < cc; ++j) x[perm[j]] = y[j];
-        return;
+        return rank;
     }
     if (rank == cc) {
         for (int j = 0; j < cc; ++j) {
@@ -442,9 +443,9 @@ static void lstsq(accelerated_ws *w, const double *A, int r, int c,
         for (int i = cc; i < rr; ++i) y[i] = 0.0;
         for (int j = cc - 1; j >= 0; --j) reflect(M, rr, cc, j, tau[j], y);
         memcpy(x, y, (size_t)rr * sizeof(double));
-        return;
+        return rank;
     }
-    if (clean && rank == 0) return;
+    if (clean && rank == 0) return 0;
 
     if (clean) {
         double *T = w->lsV, *tau2 = w->lssig, *v = w->lsz;
@@ -470,7 +471,7 @@ static void lstsq(accelerated_ws *w, const double *A, int r, int c,
             for (int i = rank; i < cc; ++i) v[i] = 0.0;
             for (int j = rank - 1; j >= 0; --j) reflect(T, cc, rank, j, tau2[j], v);
             for (int j = 0; j < cc; ++j) x[perm[j]] = v[j];
-            return;
+            return rank;
         }
         if (sound) {
             for (int j = 0; j < cc; ++j) v[j] = b[perm[j]];
@@ -483,7 +484,7 @@ static void lstsq(accelerated_ws *w, const double *A, int r, int c,
             for (int i = 0; i < rr; ++i) y[i] = (i < rank) ? v[i] : 0.0;
             for (int j = rank - 1; j >= 0; --j) reflect(M, rr, cc, j, tau[j], y);
             memcpy(x, y, (size_t)rr * sizeof(double));
-            return;
+            return rank;
         }
     }
 
@@ -494,8 +495,10 @@ static void lstsq(accelerated_ws *w, const double *A, int r, int c,
     jacobi_svd(M, rr, cc, V, sig);
     double smax = 0.0;
     for (int j = 0; j < cc; ++j) if (sig[j] > smax) smax = sig[j];
+    int svd_rank = 0;
     for (int j = 0; j < cc; ++j) {
         if (!(sig[j] > cut * smax)) continue;
+        ++svd_rank;
         double coef = 0.0;
         if (tall) {
             for (int i = 0; i < rr; ++i) coef += M[(size_t)i * cc + j] * b[i];
@@ -507,6 +510,7 @@ static void lstsq(accelerated_ws *w, const double *A, int r, int c,
             for (int i = 0; i < rr; ++i) x[i] += coef * M[(size_t)i * cc + j];
         }
     }
+    return svd_rank;
 }
 
 /* Minus the gradient of the objective, less the rounding of the terms summed
@@ -551,8 +555,8 @@ static void nn_gradient(accelerated_ws *w, int quad, int k, const int *idx,
     }
 }
 
-static void nn_support_solve(accelerated_ws *w, int quad, int k, const int *idx,
-                             const double *d, int ns, double *sol)
+static int nn_support_solve(accelerated_ws *w, int quad, int k, const int *idx,
+                            const double *d, int ns, double *sol)
 {
     const int p = w->p;
     const int *sup = w->nnsup;
@@ -562,14 +566,13 @@ static void nn_support_solve(accelerated_ws *w, int quad, int k, const int *idx,
                 w->lsA[(size_t)i * ns + j] = w->gram[(size_t)sup[i] * k + sup[j]];
             w->lsrhs[i] = w->qc[sup[i]];
         }
-        lstsq(w, w->lsA, ns, ns, w->lsrhs, sol);
-        return;
+        return lstsq(w, w->lsA, ns, ns, w->lsrhs, sol);
     }
     for (int j = 0; j < ns; ++j) {
         const double *a = w->units + (size_t)idx[sup[j]] * p;
         for (int i = 0; i < p; ++i) w->lsA[(size_t)i * ns + j] = a[i];
     }
-    lstsq(w, w->lsA, p, ns, d, sol);
+    return lstsq(w, w->lsA, p, ns, d, sol);
 }
 
 /* QR factorisation of the support's normals, updated as rows enter and leave
@@ -666,6 +669,50 @@ static void factor_solve(accelerated_ws *w, int quad, const double *d)
     }
 }
 
+/* Rows of the Gram matrix are dependent whenever there are more candidate rows
+ * than dimensions.  The minimum-norm solution sol of a block least squares
+ * reported singular then leaves the part of qc outside its range as a residual
+ * beyond rounding, and the quadratic falls without bound along that residual,
+ * which the block maps to zero.  Only that rank tells a singular block apart: an
+ * ill-conditioned one of full rank can leave a residual above a componentwise
+ * floor that is still rounding.  The multipliers move along the residual until
+ * the first one it lowers reaches zero, and that row leaves the support.  A
+ * residual that does not raise the entering row would leave it at zero, so
+ * nothing moves and the caller steps towards sol instead.  Returns whether the
+ * multipliers moved. */
+static int nn_ray_step(accelerated_ws *w, int k, int ns, int enter,
+                       const double *sol, double *lam)
+{
+    const int *sup = w->nnsup;
+    double *res = w->nnres, enter_res = 0.0;
+    int ray = 0;
+    for (int i = 0; i < ns; ++i) {
+        const double *Hi = w->gram + (size_t)sup[i] * k;
+        double s = w->qc[sup[i]], mag = 0.0;
+        for (int j = 0; j < ns; ++j) {
+            s -= Hi[sup[j]] * sol[j];
+            mag += fabs(Hi[sup[j]]) * fabs(sol[j]);
+        }
+        res[i] = s;
+        if (fabs(s) > rounding_floor(fabs(w->qc[sup[i]]) + mag)) ray = 1;
+        if (sup[i] == enter) enter_res = s;
+    }
+    if (!ray || !(enter_res > 0.0)) return 0;
+
+    int first = -1;
+    double ratio = INFINITY;
+    for (int i = 0; i < ns; ++i) {
+        if (!(res[i] < 0.0)) continue;
+        const double r = lam[sup[i]] / -res[i];
+        if (r < ratio) { ratio = r; first = sup[i]; }
+    }
+    if (first < 0) return 0;
+    for (int i = 0; i < ns; ++i) lam[sup[i]] += ratio * res[i];
+    lam[first] = 0.0;
+    for (int i = 0; i < k; ++i) w->nnpass[i] = (unsigned char)(w->nnpass[i] && lam[i] > 0.0);
+    return 1;
+}
+
 /* Lawson and Hanson's active-set method over lam >= 0, for the least-squares
  * problem (quad = 0) and for the quadratic whose matrix is the Gram matrix of
  * the candidate normals (quad = 1).  Both iteration caps only guard against
@@ -697,12 +744,14 @@ static void nn_solve(accelerated_ws *w, int quad, int k, const int *idx,
         for (int it2 = 0; it2 < cap; ++it2) {
             int ns = 0;
             for (int i = 0; i < k; ++i) if (passive[i]) sup[ns++] = i;
+            int rank = ns;
             if (factor_sync(w, k, idx, tol)) {
                 factor_solve(w, quad, d);
                 for (int i = 0; i < ns; ++i) sol[i] = w->fy[w->fpos[sup[i]]];
             } else {
-                nn_support_solve(w, quad, k, idx, d, ns, sol);
+                rank = nn_support_solve(w, quad, k, idx, d, ns, sol);
             }
+            if (quad && rank < ns && nn_ray_step(w, k, ns, enter, sol, lam)) continue;
             for (int i = 0; i < k; ++i) step[i] = 0.0;
             int positive = 1;
             for (int i = 0; i < ns; ++i) {
@@ -1614,6 +1663,7 @@ static size_t layout(accelerated_ws *w, double *base, size_t n, size_t p)
     TAKE(fcoef, p);      TAKE(fy, p);
     TAKE(gram, n * n);   TAKE(qc, n);
     TAKE(nnw, n);        TAKE(nnstep, n);    TAKE(nnsol, n);    TAKE(nnprev, n);
+    TAKE(nnres, n);
     TAKE(nnv, p);        TAKE(nnmag, p);
     TAKE(kx, p);         TAKE(kmag, p);      TAKE(kstep, p);    TAKE(kcorr, p);
     TAKE(kapex, p);      TAKE(xcert, p);
