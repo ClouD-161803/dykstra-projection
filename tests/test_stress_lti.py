@@ -443,6 +443,55 @@ class StressTests(unittest.TestCase):
                 np.testing.assert_allclose(accelerated.projection, result.projection, rtol=0.0,
                                            atol=1e-11 * max(1.0, float(np.abs(z).max())))
 
+    def test_the_paper_examples_follow_dykstra_or_certify(self) -> None:
+        # The shared box-and-line example of the LTI runners, and the three-plane
+        # arrangement of the paper's vertex, loop-drift and envelope figures from starts
+        # beyond each vertex, from the entry of its loop phase, from far away, and inside
+        A, b = three_plane_arrangement()
+        v_12, v_13 = np.array([1.0, 0.85]), np.array([1.0, 0.35])
+        v_23 = np.linalg.solve(A[1:], b[1:])
+        problems = {"box and line": box_line_problem()[:3]}
+        starts = {"beyond v12": v_12 + 1.0, "beyond v13": v_13 + np.array([1.0, -1.0]),
+                  "beyond v23": v_23 + np.array([1.0, 0.0]), "far right": np.array([40.0, 0.6]),
+                  "loop entry": np.array([0.9, 0.6]) + A.T @ np.array([4.0, 6.0, 5.0]),
+                  "inside": np.array([0.0, 0.5])}
+        for start_name, z in starts.items():
+            problems[f"three planes, {start_name}"] = (z, A, b)
+        for case_name, (z, A_case, b_case) in problems.items():
+            reference = DykstraProjectionSolver(z, A_case, b_case, max_iter=3000, plot_errors=True)
+            dykstra = reference.solve()
+            for preset in PRESETS:
+                for budget in (5, 30, 3000):
+                    label = f"{case_name}, {preset}, budget {budget}"
+                    with self.subTest(label):
+                        solver = LTISolver(z, A_case, b_case, max_iter=budget, preset=preset, plot_errors=True)
+                        result = solver.solve()
+                        self.assert_on_contract(solver, result, dykstra, reference.actual_projection, budget, label)
+            if libraries_built():
+                with self.subTest(case=case_name, solver="C"):
+                    accelerated = accelerated_c_projection(z, A_case, b_case, 3000)
+                    self.assertTrue(accelerated.settled)
+                    np.testing.assert_allclose(accelerated.projection, reference.actual_projection, rtol=0.0,
+                                               atol=1e-9 * float(np.abs(z).max()))
+
+    def test_the_performance_problem_is_certified_where_dykstra_still_moves(self) -> None:
+        # On the 96 by 32 problem of the performance figure deflated_modal certifies the
+        # projection on entering cycle 551, where Dykstra is still 0.47 away from it and
+        # its active set last changes on cycle 4827. The history up to there is Dykstra's
+        z, A, b = performance_problem()
+        solver = LTISolver(z, A, b, max_iter=6000, preset="deflated_modal", plot_errors=True)
+        result = solver.solve()
+        self.assertEqual(result.certificate, "kkt")
+        self.assertLess(result.settled_at, 6000)
+        dykstra = DykstraProjectionSolver(z, A, b, max_iter=result.settled_at, plot_errors=True).solve()
+        self.assert_on_contract(solver, result, dykstra, solver.actual_projection, result.settled_at,
+                                "the performance problem")
+        if libraries_built():
+            accelerated = accelerated_c_projection(z, A, b, 6000)
+            self.assertTrue(accelerated.settled)
+            self.assertIn(accelerated.cycles, (result.settled_at - 1, result.settled_at))
+            np.testing.assert_allclose(accelerated.projection, result.projection, rtol=0.0, atol=1e-11)
+
 
 if __name__ == "__main__":
     unittest.main()
