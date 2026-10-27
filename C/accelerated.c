@@ -853,15 +853,22 @@ static int kkt_verify(accelerated_ws *w, const int *sup, int ns)
         for (int i = 0; i < nt; ++i) w->mult[w->ktight[i]] = w->klam[i];
     }
 
+    /* Both least-squares solves spread their rounding over every coordinate the
+     * tight rows touch, on the scale of the whole step, which a coordinate the step
+     * does not move would otherwise have no allowance for. */
+    const double step_norm = nrm2(step, p);
     for (int k = 0; k < p; ++k) {
         double residual = step[k], weight = 0.0;
+        int touched = 0;
         for (int i = 0; i < nt; ++i) {
             const double a = w->units[(size_t)w->ktight[i] * p + k];
             residual -= a * w->klam[i];
             weight += fabs(a) * w->klam[i];
+            touched = touched || (a != 0.0);
         }
         const double allowed = KKT_ACCURACY * fabs(step[k])
-                             + rounding_floor(fabs(z[k]) + fabs(x[k]) + weight);
+                             + rounding_floor(fabs(z[k]) + fabs(x[k]) + (touched ? step_norm : 0.0)
+                                              + weight);
         if (!(fabs(residual) <= allowed)) return 0;
     }
     memcpy(w->xcert, x, (size_t)p * sizeof(double));

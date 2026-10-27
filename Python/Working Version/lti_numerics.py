@@ -514,10 +514,16 @@ def _kkt_verify(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray, support: 
 
     # x is then the projection of z - r, so the residual r bounds its error. The
     # multiplier terms enter only at rounding: they grow as the tight normals become
-    # nearly dependent, and letting them loosen the accuracy certified wrong supports
+    # nearly dependent, and letting them loosen the accuracy certified wrong supports.
+    # Both least-squares solves spread their rounding over every coordinate the tight
+    # rows touch, on the scale of the whole step, which a coordinate the step does not
+    # move would otherwise have no allowance for
     residual = step - unit_A.T @ multipliers
+    spread = np.zeros(len(z))
+    if tight.size:
+        spread[np.any(unit_A[tight] != 0.0, axis=0)] = np.linalg.norm(step)
     allowed = (_KKT_ACCURACY * np.abs(step)
-               + rounding_floor(np.abs(z) + np.abs(x) + np.abs(unit_A).T @ multipliers))
+               + rounding_floor(np.abs(z) + np.abs(x) + spread + np.abs(unit_A).T @ multipliers))
     if np.any(np.abs(residual) > allowed):
         return None
     return x, multipliers
