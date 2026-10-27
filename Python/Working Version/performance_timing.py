@@ -2,8 +2,9 @@
 behind the SIAM paper's tab:dykvsacc and the right panel of fig:performance.
 
 Run from this folder with `python performance_timing.py`, or with `--tiers small` and
-`--seeds 2` for a short run, or with `--from-csv` to rebuild the outputs from the records of
-the last run without timing again. Every problem is a Generator 2 polyhedron from
+`--seeds 2` for a short run, or with `--quick` for a shorter one written to a temporary
+directory, or with `--from-csv` to rebuild the outputs from the records of the last run
+without timing again. Every problem is a Generator 2 polyhedron from
 problem_generators with its infeasible start, problems 0 to seeds - 1 of each size tier.
 
 For each problem the first cycle at which an iterate is within TOLERANCE in squared
@@ -27,6 +28,7 @@ import platform
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 
 import numpy as np
@@ -400,23 +402,35 @@ def run(tiers: tuple = TABLE_TIERS, seeds: int = SEEDS,
 
 def main() -> None:
     """Parse the command line and run."""
+    global REPEATS
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--tiers", choices=("table", "small"), default="table")
     parser.add_argument("--seeds", type=int, default=SEEDS)
     parser.add_argument("--implementation", choices=("c", "python", "both"), default="both")
     parser.add_argument("--from-csv", action="store_true",
                         help="rebuild the outputs from results/paper/performance_timing.csv")
+    parser.add_argument("--quick", action="store_true",
+                        help="the small tiers, one problem each and one timed run per solver, "
+                             "written to a temporary directory")
     args = parser.parse_args()
     implementations = ("c", "python") if args.implementation == "both" else (args.implementation,)
     quiet_accelerate_warnings()
     command = " ".join(["python performance_timing.py", *sys.argv[1:]])
-    if args.from_csv:
+    began = time.perf_counter()
+    if args.quick:
+        REPEATS = 1
+        paper_figures.OUTPUT_DIR = tempfile.mkdtemp(prefix="performance_timing_")
+        run(SMALL_TIERS, 1, implementations, command)
+    elif args.from_csv:
         print_method()
         records = read_records(os.path.join(paper_figures.OUTPUT_DIR, "performance_timing.csv"))
         report(records, implementations, command, full_figure=True)
     else:
         run(TABLE_TIERS if args.tiers == "table" else SMALL_TIERS, args.seeds, implementations,
             command)
+    print(f"Finished in {time.perf_counter() - began:.0f} s: performance_timing.csv, and per "
+          f"implementation tab-dykvsacc, fig-performance-right and fig-performance as .tex and "
+          f"performance_scaling as PNG and PDF, in {paper_figures.OUTPUT_DIR}")
 
 
 if __name__ == "__main__":
