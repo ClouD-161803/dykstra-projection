@@ -4,7 +4,8 @@ and tab:sm-bench-profiles.
 
 Install the solvers with `uv sync --group benchmark` and build the C solvers with
 `make -C C`, both from the repository root, then run from this folder with
-`python benchmark.py`, or with `--tiers 2 --seeds 1` for a short run.
+`python benchmark.py`, or with `--tiers 2 --seeds 1` for a short run, or with `--quick` for
+one problem written to a temporary directory.
 
 The test set is problems 0 to seeds - 1 of each tier in TIERS, n = 4p - 4 half-spaces in
 dimension p, drawn by problem_generators.problem and posed as the QP of minimising
@@ -35,6 +36,7 @@ import math
 import os
 import statistics
 import sys
+import tempfile
 import time
 
 import numpy as np
@@ -382,15 +384,28 @@ def run(tiers: tuple = TIERS, seeds: int = SEEDS, oracle: bool = True,
 
 def main() -> None:
     """Parse the command line and run."""
+    global REPEATS
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--tiers", type=int, default=len(TIERS),
                         help="number of tiers to run, from the smallest")
     parser.add_argument("--seeds", type=int, default=SEEDS)
     parser.add_argument("--no-oracle", action="store_true")
+    parser.add_argument("--quick", action="store_true",
+                        help="one problem of the smallest tier and one timed run per solver, "
+                             "written to a temporary directory")
     args = parser.parse_args()
     quiet_accelerate_warnings()
-    run(TIERS[:args.tiers], args.seeds, not args.no_oracle,
+    began = time.perf_counter()
+    tiers, seeds = TIERS[:args.tiers], args.seeds
+    if args.quick:
+        REPEATS = 1
+        paper_figures.OUTPUT_DIR = tempfile.mkdtemp(prefix="benchmark_")
+        tiers, seeds = TIERS[:1], 1
+    run(tiers, seeds, not args.no_oracle,
         " ".join(["python benchmark.py", *sys.argv[1:]]))
+    print(f"Finished in {time.perf_counter() - began:.0f} s: benchmark.csv, "
+          f"tab-benchmark-dense.tex, tab-sm-bench-tiers.tex and tab-sm-bench-profiles.tex in "
+          f"{paper_figures.OUTPUT_DIR}")
 
 
 if __name__ == "__main__":
