@@ -562,6 +562,10 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
     # the active slacks are rounding noise and ask for about 1/eps cycles.
     MAX_SKIP_CYCLES = np.finfo(float).eps ** -0.5
 
+    # Rounding allowed, in units of eps times the magnitudes summed, in a quantity
+    # that is zero in exact arithmetic, as in lti_numerics.py
+    ROUNDING_UNITS = 64
+
     def __init__(self, *args, **kwargs):
         """Initialise the stall detection solver with additional tracking."""
         super().__init__(*args, **kwargs)
@@ -571,6 +575,11 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
         self.prev_x_no_ffw = None
         self.frozen_visits = 0
         self.active_at_last_visit = np.zeros(self.n, dtype=bool)
+
+    @classmethod
+    def _rounding_floor(cls, magnitude):
+        """Returns the rounding allowed in a quantity summed from terms of this magnitude."""
+        return cls.ROUNDING_UNITS * np.finfo(float).eps * magnitude
 
     def _update_error(self, m: int, x_temp: np.ndarray, x: np.ndarray, index: int) -> None:
         """
@@ -590,9 +599,11 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
 
         While the frozen cycle repeats, an active half-space m changes only
         d_m = e_m . a_m, by its constant slack s_m = a_m^T x_{m-1} - b_m per
-        visit, and turns inactive on visit ceil(d_m / -s_m). With N the least
-        such count over draining half-spaces (s_m < 0), N - 1 cycles are
-        skipped and the switching cycle runs normally.
+        visit, and first lets the point move on visit floor(d_m / -s_m) + 1.
+        With N the least such count over draining half-spaces (s_m < 0), N - 1
+        cycles are skipped and the switching cycle runs normally. A ratio within
+        rounding of an integer k is a tie, at which visit k gives the same point
+        in either branch, so N is k + 1 whichever way the ratio rounded.
 
         Args:
             i: Current iteration.
@@ -616,11 +627,16 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
             unit_normal, constant_offset = self._normalise(normal, offset)
             slack = np.dot(visits[m - 1], unit_normal) - constant_offset
             if slack < 0:
+                slack_floor = self._rounding_floor(
+                    np.dot(np.abs(visits[m - 1]), np.abs(unit_normal)) + abs(constant_offset))
+                ratio = np.dot(self.e[m], unit_normal) / -slack
+                ratio_floor = (self._rounding_floor(np.dot(np.abs(self.e[m]), np.abs(unit_normal)))
+                               + ratio * slack_floor) / -slack
                 cycles_to_switch = min(cycles_to_switch,
-                                       np.dot(self.e[m], unit_normal) / -slack)
+                                       max(np.floor(ratio + ratio_floor) + 1, 1))
         if cycles_to_switch > self.MAX_SKIP_CYCLES:
             return
-        n_fast_forward = max(int(np.ceil(cycles_to_switch)), 1) - 1
+        n_fast_forward = int(cycles_to_switch) - 1
         if n_fast_forward == 0:
             return
 
