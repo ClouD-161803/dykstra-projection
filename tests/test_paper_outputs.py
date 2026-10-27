@@ -297,9 +297,23 @@ class RunToToleranceTests(unittest.TestCase):
             written = {path.name for path in directory.iterdir()}
             records = performance_timing.read_records(str(directory / "performance_timing.csv"))
             rebuilt = performance_timing.report(records, implementations, "rebuilt")
+            tables = {implementation: (directory / f"tab-dykvsacc-{implementation}.tex").read_text()
+                      for implementation in implementations}
         for implementation in implementations:
             self.assertEqual(performance_timing.table_rows(rebuilt[implementation]),
                              performance_timing.table_rows(summaries[implementation]))
+        # every record names its implementation and schedule, every .tex its implementation and
+        # the form of its cells, and every cell gives the quartiles in brackets
+        self.assertEqual({(r["implementation"], r["schedule"]) for r in records},
+                         {(implementation, performance_timing.DEFAULT_SCHEDULE)
+                          for implementation in implementations})
+        for implementation, table in tables.items():
+            with self.subTest(table=implementation):
+                self.assertIn(f"% {performance_timing.IMPLEMENTATION_NAMES[implementation]} implementation",
+                              table)
+                self.assertIn("first and third quartiles", table)
+                row = performance_timing.table_rows(summaries[implementation]).splitlines()[0]
+                self.assertEqual(row.count("["), 2 * len(performance_timing.SOLVERS))
         for implementation in implementations:
             with self.subTest(implementation=implementation):
                 self.assertIn(f"tab-dykvsacc-{implementation}.tex", written)
