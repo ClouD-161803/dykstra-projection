@@ -23,6 +23,7 @@ Additional Features:
 from __future__ import annotations
 
 
+import sys
 import warnings
 import numpy as np
 from abc import ABC, abstractmethod
@@ -253,7 +254,7 @@ class ConvexProjectionSolver(ABC):
                 "a constraint satisfied at the initial point can still determine "
                 "the projection.",
                 DeprecationWarning,
-                stacklevel=2,
+                stacklevel=self._caller_stacklevel(),
             )
 
         self.track_error = track_error
@@ -284,6 +285,20 @@ class ConvexProjectionSolver(ABC):
         self.squared_errors = np.zeros(self.max_iter + 1)
         self.stalled_errors = np.full(self.max_iter + 1, np.nan)
         self.converged_errors = np.full(self.max_iter + 1, np.nan)
+
+    def _caller_stacklevel(self) -> int:
+        """Returns the stack level, for warnings.warn in __init__, of the code that
+        constructed this solver.
+
+        It skips every frame of this module, such as dykstra_projection, and every
+        constructor of this instance, since Python's default filters show a
+        DeprecationWarning only when it is attributed to __main__.
+        """
+        frame, level = sys._getframe(1), 1
+        while frame is not None and (frame.f_globals is globals()
+                                     or frame.f_locals.get("self") is self):
+            frame, level = frame.f_back, level + 1
+        return level
 
     @abstractmethod
     def _update_error(self, m: int, x_temp: np.ndarray, x: np.ndarray, index: int) -> None:
