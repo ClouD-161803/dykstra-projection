@@ -288,3 +288,258 @@ def instance_text(normals: tuple, offsets: tuple, start: tuple) -> str:
         return "(" + ", ".join(str(value) for value in values) + ")"
     return (f"a_1 = {vector(normals[0])}, a_2 = {vector(normals[1])}, a_3 = {vector(normals[2])}, "
             f"b = {vector(offsets)}, x0 = {vector(start)}")
+
+
+# Floating-point runs
+
+def arrays(parameters: np.ndarray) -> tuple:
+    """Unit normals (B, 3, 2), offsets (B, 3), and starts (B, 2) of a batch of parameters.
+
+    Each row of parameters holds the three normal angles, the three offsets, and the start.
+    """
+    angles = parameters[:, :3]
+    normals = np.stack([np.cos(angles), np.sin(angles)], axis=-1)
+    return normals, parameters[:, 3:6], parameters[:, 6:]
+
+
+def valid(parameters: np.ndarray) -> np.ndarray:
+    """Which instances are in general position, with margins, and start outside the polyhedron."""
+    normals, offsets, starts = arrays(parameters)
+    u, v = normals[..., 0], normals[..., 1]
+    w = np.stack([u[:, 1] * v[:, 2] - v[:, 1] * u[:, 2], u[:, 2] * v[:, 0] - v[:, 2] * u[:, 0],
+                  u[:, 0] * v[:, 1] - v[:, 0] * u[:, 1]], axis=1)
+    D = (w * offsets).sum(axis=1)
+    scale = np.maximum(np.abs(offsets).max(axis=1), np.abs(starts).max(axis=1))
+    dots = np.stack([(normals[:, i] * normals[:, j]).sum(axis=1)
+                     for i, j in ((0, 1), (0, 2), (1, 2))], axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        floors = np.abs(D[:, None] / w)
+    apart = (1.0 - np.abs(dots) >= PARALLEL_MARGIN).all(axis=1)
+    not_concurrent = (floors >= CONCURRENCY_MARGIN * scale[:, None]).all(axis=1)
+    # sum_i w_i (a_i . x - b_i) = -D at every x, so when the normals positively span the plane,
+    # i.e. every w_i has one sign, an interior point needs D of that sign
+    positive, negative = (w > 0).all(axis=1), (w < 0).all(axis=1)
+    interior = ~(positive & (D <= 0)) & ~(negative & (D >= 0))
+    outside = ((normals * starts[:, None, :]).sum(axis=2) - offsets > 0).any(axis=1)
+    return apart & not_concurrent & interior & outside
+
+
+def draw_parameters(rng: np.random.Generator, count: int) -> np.ndarray:
+    """count random valid instances as rows of parameters."""
+    drawn = []
+    while sum(len(d) for d in drawn) < count:
+        batch = np.concatenate([rng.uniform(0.0, 2.0 * np.pi, (count, 3)),
+                                rng.standard_normal((count, 3)),
+                                START_SCALE * rng.standard_normal((count, 2))], axis=1)
+        drawn.append(batch[valid(batch)])
+    return np.concatenate(drawn)[:count]
+
+
+def wedge_certificates(normals: np.ndarray, offsets: np.ndarray, starts: np.ndarray) -> np.ndarray:
+    """Whether the wedge phase without half-space k ends at the projection, as (3, B) flags."""
+    scale = np.maximum(np.abs(offsets).max(axis=1), np.abs(starts).max(axis=1))
+    margin = CERTIFICATE_MARGIN * scale
+    flags = np.zeros((3, len(starts)), dtype=bool)
+    for k in range(3):
+        y_i, y_j, gamma = wedge_limits([(normals[:, m, 0], normals[:, m, 1]) for m in range(3)],
+                                       [offsets[:, m] for m in range(3)],
+                                       (starts[:, 0], starts[:, 1]), k)
+        flags[k] = (y_i > margin) & (y_j > margin) & (gamma < -margin)
+    return flags
+
+
+def float_runs(parameters: np.ndarray, horizon: int) -> dict:
+    """float_runs_on of the instances given as rows of parameters."""
+    return float_runs_on(*arrays(parameters), horizon)
+
+
+def float_runs_on(normals: np.ndarray, offsets: np.ndarray, starts: np.ndarray,
+                  horizon: int) -> dict:
+    """Run plain Dykstra on a batch of instances and count their activity changes.
+
+    normals (B, 3, 2) are unit vectors, offsets are (B, 3), and starts are (B, 2). Returns per
+    instance the changes after the opening cycle of each half-space, the activity of
+    cycle 1, the rows the start violates, the cycle the run stopped in, its outcome (FIXED,
+    CERTIFIED, or BUDGET), whether a visit was undecided, the last cycle with a change, and all six
+    counts.
+    """
+    count = len(starts)
+    u, v = np.ascontiguousarray(normals[..., 0].T), np.ascontiguousarray(normals[..., 1].T)
+    b = np.ascontiguousarray(offsets.T)
+    certificates = wedge_certificates(normals, offsets, starts)
+    out = {"after": np.zeros((count, 3), dtype=int), "cycle1": np.zeros((count, 3), dtype=bool),
+           "violated": ((normals * starts[:, None, :]).sum(axis=2) - offsets > 0),
+           "stopped_at": np.full(count, horizon), "outcome": np.full(count, BUDGET),
+           "undecided": np.zeros(count, dtype=bool), "last_change": np.zeros(count, dtype=int)}
+
+    alive = np.arange(count)
+    x0, x1 = starts[:, 0].copy(), starts[:, 1].copy()
+    y = np.zeros((3, count))
+    label = np.zeros((3, count), dtype=bool)
+    previous_label = np.zeros((3, count), dtype=bool)
+    cycle1 = np.zeros((3, count), dtype=bool)
+    after = np.zeros((3, count), dtype=int)
+    phase_start = np.ones(count, dtype=int)
+    last_change = np.zeros(count, dtype=int)
+    undecided = np.zeros(count, dtype=bool)
+    columns = np.arange(count)
+    for t in range(1, horizon + 1):
+        previous_x0, previous_x1, previous_y = x0, x1, y.copy()
+        for i in range(3):
+            s0, s1 = x0 + y[i] * u[i], x1 + y[i] * v[i]
+            p0, p1 = u[i] * s0, v[i] * s1
+            slack = p0 + p1 - b[i]
+            undecided |= np.abs(slack) <= rounding_floor(np.abs(p0) + np.abs(p1) + np.abs(b[i]))
+            active = slack > 0.0
+            step = np.where(active, slack, 0.0)
+            x0, x1 = s0 - step * u[i], s1 - step * v[i]
+            y[i] = step
+            label[i] = active
+        if t == 1:
+            cycle1 = label.copy()
+            previous_label = label.copy()
+        else:
+            changed = label != previous_label
+            after += changed
+            moved = changed.any(axis=0)
+            last_change[moved] = t
+            phase_start[moved] = t
+            previous_label = label.copy()
+
+        floor = rounding_floor(np.maximum(np.abs(previous_x0), np.abs(previous_x1))
+                               + np.abs(previous_y).sum(axis=0) + np.abs(b).sum(axis=0))
+        fixed = ((np.abs(x0 - previous_x0) <= floor) & (np.abs(x1 - previous_x1) <= floor)
+                 & (np.abs(y - previous_y) <= floor).all(axis=0))
+        wedge = (label.sum(axis=0) == 2) & (t - phase_start >= 2)
+        certified = wedge & certificates[np.argmin(label, axis=0), columns] & ~fixed
+        done = fixed | certified
+        if t == horizon:
+            done = np.ones_like(done)
+        if done.any():
+            finished = alive[done]
+            out["after"][finished] = after[:, done].T
+            out["cycle1"][finished] = cycle1[:, done].T
+            out["stopped_at"][finished] = t
+            out["outcome"][finished] = np.where(fixed[done], FIXED,
+                                                np.where(certified[done], CERTIFIED, BUDGET))
+            out["undecided"][finished] = undecided[done]
+            out["last_change"][finished] = last_change[done]
+            keep = ~done
+            if not keep.any():
+                break
+            alive, x0, x1, y = alive[keep], x0[keep], x1[keep], y[:, keep]
+            u, v, b = u[:, keep], v[:, keep], b[:, keep]
+            label, previous_label, cycle1 = label[:, keep], previous_label[:, keep], cycle1[:, keep]
+            after, phase_start = after[:, keep], phase_start[keep]
+            last_change, undecided = last_change[keep], undecided[keep]
+            certificates = certificates[:, keep]
+            columns = np.arange(alive.size)
+    out.update(all_counts(out["after"], out["cycle1"], out["violated"]))
+    return out
+
+
+def usable(runs: dict) -> np.ndarray:
+    """Runs whose counts are final and decided beyond rounding."""
+    return (runs["outcome"] != BUDGET) & ~runs["undecided"]
+
+
+def best_rows(parameters: np.ndarray, runs: dict, keep: int) -> dict:
+    """The keep usable instances with the highest value of each objective.
+
+    Ties go to the run that stopped first. Returns, per objective, the parameters, values, and
+    stopping cycles.
+    """
+    rows = np.flatnonzero(usable(runs))
+    best = {}
+    for name in OBJECTIVES:
+        order = np.lexsort((runs["stopped_at"][rows], -runs[name][rows]))[:keep]
+        chosen = rows[order]
+        best[name] = {"parameters": parameters[chosen], "values": runs[name][chosen],
+                      "stopped_at": runs["stopped_at"][chosen]}
+    return best
+
+
+def merge_best(parts: list, keep: int) -> dict:
+    """The best keep instances per objective over several results of best_rows."""
+    merged = {}
+    for name in OBJECTIVES:
+        parameters = np.concatenate([part[name]["parameters"] for part in parts])
+        values = np.concatenate([part[name]["values"] for part in parts])
+        stopped = np.concatenate([part[name]["stopped_at"] for part in parts])
+        order = np.lexsort((stopped, -values))[:keep]
+        merged[name] = {"parameters": parameters[order], "values": values[order],
+                        "stopped_at": stopped[order]}
+    return merged
+
+
+def histogram(runs: dict, mask: np.ndarray) -> dict:
+    """The number of instances at each value of each objective, over the runs in mask."""
+    return {name: dict(zip(*(values.tolist() for values in np.unique(runs[name][mask],
+                                                                      return_counts=True))))
+            for name in OBJECTIVES}
+
+
+def sampling_task(task: tuple) -> dict:
+    """Draw and run one batch of random instances, and keep the best of each objective."""
+    seed, count, horizon, keep = task
+    started = time.perf_counter()
+    parameters = draw_parameters(np.random.default_rng(seed), count)
+    runs = float_runs(parameters, horizon)
+    mask = usable(runs)
+    return {"best": best_rows(parameters, runs, keep), "histogram": histogram(runs, mask),
+            "sampled": count, "undecided": int(runs["undecided"].sum()),
+            "budget": int((runs["outcome"] == BUDGET).sum()),
+            "fixed": int((runs["outcome"] == FIXED).sum()),
+            "certified": int((runs["outcome"] == CERTIFIED).sum()),
+            "longest": int(runs["stopped_at"][mask].max(initial=0)),
+            "seconds": time.perf_counter() - started}
+
+
+def climb_task(task: tuple) -> dict:
+    """Hill-climb one group of chains on one objective.
+
+    Each step perturbs every chain's angles, offsets, and start by a log-uniform step and keeps
+    the proposal if it is valid, usable, and does not lower the objective, so that a chain also
+    drifts along a level of the objective. Returns the best instances of every objective among
+    all usable proposals, the number of usable proposals at each value of each objective, and the
+    numbers of proposals, valid proposals run, usable proposals, and accepted steps.
+    """
+    objective, chains, steps, horizon, keep, seed = task
+    rng = np.random.default_rng(seed)
+    current = np.array(chains, dtype=float)
+    value = float_runs(current, horizon)[objective]
+    parts, proposals, evaluated, kept, accepted = [], 0, 0, 0, 0
+    values = {name: {} for name in OBJECTIVES}
+    scales = np.array([1.0] * 6 + [START_SCALE] * 2)
+    low, high = np.log(CLIMB_STEP_RANGE[0]), np.log(CLIMB_STEP_RANGE[1])
+    for _ in range(steps):
+        size = np.exp(rng.uniform(low, high, (len(current), 1)))
+        proposal = current + size * scales * rng.standard_normal(current.shape)
+        ok = valid(proposal)
+        proposals += len(proposal)
+        if not ok.any():
+            continue
+        rows = np.flatnonzero(ok)
+        runs = float_runs(proposal[rows], horizon)
+        mask = usable(runs)
+        evaluated += len(rows)
+        kept += int(mask.sum())
+        parts.append(best_rows(proposal[rows], runs, keep))
+        for name, counted in histogram(runs, mask).items():
+            for level, number in counted.items():
+                values[name][level] = values[name].get(level, 0) + number
+        gain = mask & (runs[objective] >= value[rows])
+        accepted += int(gain.sum())
+        value[rows[gain]] = runs[objective][gain]
+        current[rows[gain]] = proposal[rows[gain]]
+    best = merge_best(parts, keep) if parts else None
+    return {"best": best, "proposals": proposals, "evaluated": evaluated, "usable": kept,
+            "accepted": accepted, "histogram": values}
+
+
+def map_tasks(function, tasks: list, workers: int) -> list:
+    """function over tasks, on a pool of workers processes, or in this process for one worker."""
+    if workers <= 1:
+        return [function(task) for task in tasks]
+    with ProcessPoolExecutor(workers) as pool:
+        return list(pool.map(function, tasks))
