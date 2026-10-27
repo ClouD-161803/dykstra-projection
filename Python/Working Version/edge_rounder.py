@@ -17,8 +17,9 @@ Explanation:
         angle and the corner's quadrant.
        * Determines the radius of the rounded corner as the minimum of half
         the width and half the height of the box.
-       * Calculates the offset `offset` for the segment based on the position
-        of the center, normal vector, and radius.
+       * Calculates the offset `offset` for the segment based on the centre of
+        the corner's arc, which touches both sides of the corner, the normal
+        vector, and the radius.
        * Appends the `normal` and `offset` to lists
         `A_rounded` and `b_rounded`, respectively.
 
@@ -80,13 +81,17 @@ def rounded_box_constraints(center, width, height, corner_segments=5):
     # Constraints for the rounded corners
     A_rounded = []
     b_rounded = []
+    # Radius of the rounded corner is the minimum of half_width and half_height
+    radius = min(half_width, half_height)
     for corner in [(1, 1), (-1, 1), (-1, -1), (1, -1)]:  # Four corners
+        # the arc of this radius that touches both sides of the corner, which is centred
+        # on the box's centre only for a square
+        arc_center = (center[0] + corner[0] * (half_width - radius),
+                      center[1] + corner[1] * (half_height - radius))
         for i in range(corner_segments):
             angle = i / corner_segments * np.pi / 2  # Adjusted angle calculation
             normal = np.array([corner[0] * np.cos(angle), corner[1] * np.sin(angle)])
-            # Radius of the rounded corner is the minimum of half_width and half_height
-            radius = min(half_width, half_height)
-            offset = np.dot(normal, center) + radius
+            offset = np.dot(normal, arc_center) + radius
             A_rounded.append(normal)
             b_rounded.append(offset)
     # This inevitably generates an extra copy of the original box constraints
