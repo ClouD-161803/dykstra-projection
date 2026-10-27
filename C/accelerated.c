@@ -276,12 +276,10 @@ static double spectral_norm(const double *A, int p, double *v, double *u,
     return sig;
 }
 
-/* 2-norm condition number of a factored matrix: inverse power iteration through
- * the LU gives 1 / sigma_min.  An estimate where the Python takes the exact
- * value; it only chooses between the closed form and the deflated or stepped
- * episode, all of which trace the same path. */
-static double cond2_estimate(const double *LU, const int *ipiv, int p,
-                             double smax, double *v, double *u, long long *iterations)
+/* Norm of the inverse of a factored matrix, 1 / sigma_min, by inverse power
+ * iteration through the LU. */
+static double inverse_norm(const double *LU, const int *ipiv, int p,
+                           double *v, double *u, long long *iterations)
 {
     seed_vector(v, p, 7u);
     double nv = nrm2(v, p);
@@ -303,7 +301,7 @@ static double cond2_estimate(const double *LU, const int *ipiv, int p,
         if (fabs(est - inv_smin) <= 1e-10 * est && it > 2) { inv_smin = est; break; }
         inv_smin = est;
     }
-    return smax * inv_smin;
+    return inv_smin;
 }
 
 /* One-sided Jacobi: rotates the columns of M until they are orthogonal, leaving
@@ -1163,16 +1161,28 @@ static void ensure_span(accelerated_ws *w)
     }
 }
 
+/* 2-norm condition number of I - A_m, factored into LU, as far as COND_LIMIT
+ * needs it.  An estimate where the Python takes the exact value; it only
+ * chooses between the closed form and the deflated or stepped episode, all of
+ * which trace the same path.  The largest singular value lies between the
+ * Frobenius norm over sqrt(p) and the Frobenius norm, which settle the
+ * comparison unless they straddle the cutoff, and only then is it estimated by
+ * power iteration, which decides as the estimate always did. */
 static double factor_resolvent(accelerated_ws *w)
 {
     const int p = w->p;
-    int conv = 0;
-    double smax = spectral_norm(w->IA, p, w->pw1, w->pw2, &conv, &w->info.power_iterations);
-    if (!conv) smax = frobenius_norm(w->IA, p);
     memcpy(w->LU, w->IA, (size_t)p * p * sizeof(double));
     if (lu_factor(w->LU, p, w->ipiv)) return INFINITY;
-    const double cond = cond2_estimate(w->LU, w->ipiv, p, smax, w->pw1, w->pw2,
-                                       &w->info.power_iterations);
+    const double inverse = inverse_norm(w->LU, w->ipiv, p, w->pw1, w->pw2,
+                                        &w->info.power_iterations);
+    const double frobenius = frobenius_norm(w->IA, p);
+    double cond = frobenius * inverse;
+    if (cond >= COND_LIMIT && frobenius / sqrt((double)p) * inverse < COND_LIMIT) {
+        int conv = 0;
+        const double smax = spectral_norm(w->IA, p, w->pw1, w->pw2, &conv,
+                                          &w->info.power_iterations);
+        cond = (conv ? smax : frobenius) * inverse;
+    }
     return isfinite(cond) ? cond : INFINITY;
 }
 
@@ -1230,9 +1240,19 @@ static void finish_closed_form(accelerated_ws *w)
     }
 }
 
-/* The envelope needs an upper bound on the contraction rate, so a converged
- * estimate is inflated slightly and an unconverged one replaced by the
- * Frobenius norm. */
+/* The envelope needs an upper bound on the contraction rate of the scanned
+ * system, so a converged estimate is inflated slightly and an unconverged one
+ * replaced by the Frobenius norm.  Only an envelope jump reads it, once the
+ * inactive rows allow one, which most phases never reach, hence a phase's setup
+ * leaves it unknown, at -1, and skip_estimate computes it then. */
+static double contraction_rate(accelerated_ws *w)
+{
+    int conv = 0;
+    double smax = spectral_norm(w->sT, w->q, w->pw1, w->pw2, &conv, &w->info.power_iterations);
+    smax = conv ? smax * (1.0 + 1e-9) : frobenius_norm(w->sT, w->q);
+    return (smax < RHO_CAP) ? smax : RHO_CAP;
+}
+
 static void setup_regular(accelerated_ws *w)
 {
     const int p = w->p;
@@ -1245,11 +1265,7 @@ static void setup_regular(accelerated_ws *w)
     w->sT = w->Am; w->sWy = w->RIA; w->sWg = w->R;
     w->sWys = w->RIAs; w->sWgs = w->Rs;
     memcpy(w->u0, w->pw3, (size_t)p * sizeof(double));
-
-    int conv = 0;
-    double smax = spectral_norm(w->Am, p, w->pw1, w->pw2, &conv, &w->info.power_iterations);
-    smax = conv ? smax * (1.0 + 1e-9) : frobenius_norm(w->Am, p);
-    w->rho = (smax < RHO_CAP) ? smax : RHO_CAP;
+    w->rho = -1.0;
 }
 
 static void span_project(const accelerated_ws *w, const double *v, double *out)
@@ -1313,11 +1329,7 @@ static int setup_deflated(accelerated_ws *w)
     w->q = kb;
     w->sT = w->T; w->sWy = w->Wy; w->sWg = w->Wg;
     w->sWys = w->Wys; w->sWgs = w->Wgs;
-
-    int conv = 0;
-    double smax = spectral_norm(w->T, kb, w->pw1, w->pw2, &conv, &w->info.power_iterations);
-    smax = conv ? smax * (1.0 + 1e-9) : frobenius_norm(w->T, kb);
-    w->rho = (smax < RHO_CAP) ? smax : RHO_CAP;
+    w->rho = -1.0;
     return 1;
 }
 
@@ -1429,12 +1441,13 @@ static double rigorous_horizon(double gamma, double beta, double alpha,
  * each read as closed_form activity reads it: a drift within rounding is no
  * drain, whatever its sign, and the level keeps the drift itself so that the
  * floor, which grows at least as fast, covers it. */
-static int skip_estimate(const accelerated_ws *w, int t, double unorm)
+static int skip_estimate(accelerated_ws *w, int t, double unorm)
 {
     for (int j = 0; j < w->n; ++j)
         if (!w->active[j] && w->beta[j] + w->rowR[j] * unorm > w->betaf[j])
             return 0;
 
+    if (w->rho < 0.0) w->rho = contraction_rate(w);
     double s = INFINITY;
     for (int m = 0; m < w->n; ++m) {
         if (!w->active[m]) continue;
