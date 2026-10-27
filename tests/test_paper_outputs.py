@@ -406,8 +406,16 @@ class BenchmarkRunTests(unittest.TestCase):
                 self.assertLess(record["projection error"], 1e-9)
 
 
+from contextlib import redirect_stdout
+import io
+
+import stall_angles
 import stall_grid
 from convex_projection_solver import DykstraProjectionSolver
+
+
+STALL_FIGURES = ("stall_grid_frozen", "stall_grid_plateau", "stall_angle_cycles",
+                 "stall_angle_stallcycles", "stall_angle_probability", "accelerated_stall_study")
 
 
 def batch_record(z: np.ndarray, A: np.ndarray, b: np.ndarray, horizon: int) -> dict:
@@ -468,6 +476,97 @@ class StallDetectorTests(unittest.TestCase):
         flags = stall_grid.approximate_stall_flags(np.asarray(result.squared_errors), "relative")
         np.testing.assert_array_equal(flags, ~np.isnan(np.asarray(result.stalled_errors)))
         self.assertTrue(flags.any())
+
+
+class StallFamilyTests(unittest.TestCase):
+    def test_the_corner_normals_meet_at_theta_and_the_projection_is_the_constructed_one(self) -> None:
+        for family in stall_angles.FAMILIES:
+            for p in stall_angles.ANGLE_DIMENSIONS:
+                with self.subTest(family=family, p=p):
+                    rng = np.random.RandomState(5)
+                    geometry = stall_angles.BUILDERS[family](0.1, p, rng)
+                    normals = stall_angles.corner_normals(geometry)
+                    cosines = (normals @ normals.T)[np.triu_indices(len(normals), 1)]
+                    np.testing.assert_allclose(cosines, np.cos(0.1), rtol=0.0, atol=1e-12)
+                    self.assertEqual(np.linalg.matrix_rank(normals), 2 if family == "wedge" else p)
+                    z, reference = stall_angles.canonical_start(geometry, rng)
+                    self.assertTrue(np.all(normals @ (z - geometry.corner) > 0.0))
+                    quadprog = ConvexProjectionSolver._find_optimal_solution(z, geometry.A, geometry.b)
+                    np.testing.assert_allclose(quadprog, reference, rtol=0.0, atol=1e-12)
+
+    def test_a_captured_start_is_one_that_projects_onto_every_corner_boundary(self) -> None:
+        for family in stall_angles.FAMILIES:
+            with self.subTest(family=family):
+                rng = np.random.RandomState(6)
+                geometry = stall_angles.BUILDERS[family](1.0, 3, rng)
+                starts, captured, references = stall_angles.approaching_starts(geometry, 300, rng)
+                rows = geometry.corner_rows
+                for z, is_captured, reference in zip(starts, captured, references):
+                    x = ConvexProjectionSolver._find_optimal_solution(z, geometry.A, geometry.b)
+                    on_boundaries = np.abs(geometry.A[:rows] @ x - geometry.b[:rows]).max() < 1e-9
+                    self.assertEqual(is_captured, on_boundaries)
+                    if is_captured:
+                        np.testing.assert_allclose(x, reference, rtol=0.0, atol=1e-12)
+                self.assertTrue(captured.any())
+
+    def test_the_wedge_capture_rate_is_theta_over_pi_plus_theta_in_any_dimension(self) -> None:
+        for p in stall_angles.ANGLE_DIMENSIONS:
+            rng = np.random.RandomState(7)
+            geometry = stall_angles.wedge(0.3, p, rng)
+            _, captured, _ = stall_angles.approaching_starts(geometry, 40000, rng)
+            exact = 0.3 / (np.pi + 0.3)
+            # four standard deviations of the binomial share
+            self.assertLess(abs(captured.mean() - exact), 4 * math.sqrt(exact * (1 - exact) / 40000))
+
+    def test_the_wedge_contracts_at_cos_theta_to_the_fourth_and_neither_family_stalls(self) -> None:
+        theta_index = stall_angles.ANGLES.index(0.3)
+        for family in stall_angles.FAMILIES:
+            records = stall_angles.sweep_cell(family, 3, theta_index, 3, 300)
+            for record in records:
+                with self.subTest(family=family, index=record["index"]):
+                    self.assertGreaterEqual(record["converged_at"], 0)
+                    self.assertEqual(record["stalling_cycles_relative"], 0)
+                    self.assertEqual(record["stalling_cycles_absolute"], 0)
+                    if family == "wedge":
+                        self.assertAlmostEqual(record["contraction"], np.cos(0.3) ** 4, places=6)
+
+    def test_the_censored_median_is_censored_only_when_a_middle_run_is(self) -> None:
+        self.assertEqual(stall_angles.censored_median(np.array([1, 2, 3, -1]), 50), (2.5, False))
+        self.assertEqual(stall_angles.censored_median(np.array([3, -1, 5, -1]), 50), (50.0, True))
+
+
+class AcceleratedStallTests(unittest.TestCase):
+    def test_the_accelerated_solver_certifies_where_dykstra_is_in_a_slow_phase(self) -> None:
+        use_c = c_solvers.libraries_built()
+        record = stall_angles.accelerated_problem("vertex", 0, 0, 2000, use_c)
+        self.assertGreater(record["dykstra_cycles"], 50)
+        self.assertEqual(record["accelerated_cycles"], 2)
+        self.assertEqual(record["accelerated_certificate"], "kkt")
+        if use_c:
+            self.assertEqual((record["dykstra_c_cycles"], record["accelerated_c_cycles"]),
+                             (record["dykstra_cycles"], record["accelerated_cycles"]))
+
+
+class StallStudyOutputTests(unittest.TestCase):
+    def test_quick_runs_write_the_six_figures(self) -> None:
+        with redirected_output() as directory, redirect_stdout(io.StringIO()):
+            shape = (stall_grid.QUICK_HALF_SPACES, stall_grid.QUICK_DIMENSIONS)
+            records = stall_grid.run_grid(*shape, stall_grid.QUICK_PROBLEMS,
+                                          stall_grid.QUICK_HORIZON, workers=1)
+            numbers = stall_grid.report(records, *shape, stall_grid.QUICK_HORIZON)
+            angles, horizon = stall_angles.QUICK_ANGLE_INDICES, stall_angles.QUICK_HORIZON
+            stall_angles.report_sweep(stall_angles.run_sweep(
+                angles, stall_angles.QUICK_PROBLEMS, horizon, 1), horizon)
+            stall_angles.report_capture(stall_angles.run_capture(
+                angles, stall_angles.QUICK_SAMPLES, stall_angles.QUICK_SAMPLES_FIT, horizon, 1))
+            stall_angles.report_accelerated(stall_angles.run_accelerated(
+                stall_angles.QUICK_ACCELERATED_INDICES, stall_angles.QUICK_ACCELERATED_PROBLEMS,
+                stall_angles.QUICK_CAP, 1), stall_angles.QUICK_CAP)
+            written = {path.name for path in directory.iterdir()}
+        expected = {name + suffix for name in STALL_FIGURES for suffix in (".png", ".pdf")}
+        self.assertTrue(expected <= written)
+        self.assertEqual(numbers["problems"], 4 * len(stall_grid.grid_cells(*shape)))
+        self.assertEqual(numbers["spanning_relative"], numbers["stalled_relative"])
 
 
 if __name__ == "__main__":
