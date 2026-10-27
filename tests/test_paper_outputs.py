@@ -710,6 +710,81 @@ class StallStudyOutputTests(unittest.TestCase):
         self.assertEqual(numbers["spanning_relative"], numbers["stalled_relative"])
 
 
+import csv
+
+
+def read_n_by_p(path: Path) -> tuple:
+    """The header and the rows of an n-by-p grid CSV of stall_grid, blank cells as NaN."""
+    with open(path, newline="", encoding="utf-8") as handle:
+        header, *rows = list(csv.reader(handle))
+    grid = np.array([[float(cell) if cell else np.nan for cell in row[1:]] for row in rows])
+    return header, [int(row[0]) for row in rows], grid
+
+
+class StallGridPgfplotsTests(unittest.TestCase):
+    # n = 4 with p = 4 falls outside the grid, hence every n-by-p file has a blank or nan cell
+    SHAPE = ((4, 8), (2, 4))
+
+    def test_the_n_by_p_grids_hold_the_heat_map_grids_transposed(self) -> None:
+        with redirected_output() as directory, redirect_stdout(io.StringIO()):
+            records = stall_grid.run_grid(*self.SHAPE, 4, 200, workers=1)
+            stall_grid.report(records, *self.SHAPE, 200)
+            files = {path.name: path for path in directory.iterdir()}
+            grids = {}
+            for name in ("stationary_percent", "approximate_percent",
+                         "approximate_tendecimal_percent", "stationary_counts",
+                         "approximate_minus_stationary", "median_period_length"):
+                header, half_spaces, grids[name] = read_n_by_p(files[f"stall_grid_{name}.csv"])
+                self.assertEqual(header, ["n/p", "2", "4"])
+                self.assertEqual(half_spaces, [4, 8])
+                self.assertTrue(np.isnan(grids[name][0, 1]))
+            tex = {name: files[f"fig-stallgrid-{name}.tex"].read_text()
+                   for name in ("stationary", "approximate", "approximate-tendecimal")}
+        for name, field in (("stationary_percent", "stalling_cycles_relative"),
+                            ("approximate_percent", "approximate_cycles_relative"),
+                            ("approximate_tendecimal_percent", "approximate_cycles_decimals")):
+            heat_map = stall_grid.cell_percentages(records, field, *self.SHAPE)
+            np.testing.assert_array_equal(grids[name], heat_map.T)
+        np.testing.assert_array_equal(grids["stationary_counts"],
+                                      grids["stationary_percent"] * 4 / 100)
+        np.testing.assert_array_equal(grids["approximate_minus_stationary"],
+                                      grids["approximate_percent"] - grids["stationary_percent"])
+        for name, text in tex.items():
+            with self.subTest(name=name):
+                self.assertIn(r"\addplot[matrix plot*, point meta=explicit, unbounded coords=jump]",
+                              text)
+                self.assertIn("python -m dykstra.stall_grid", text.splitlines()[0])
+                body = text[text.index("p n value"):text.index("};")].splitlines()[1:]
+                cells = {(int(p), int(n)): float(value)
+                         for p, n, value in (line.split() for line in body if line)}
+                grid = grids[name.replace("-", "_") + "_percent"]
+                self.assertEqual(len(cells), grid.size)
+                for (p, n), value in cells.items():
+                    expected = grid[self.SHAPE[0].index(n), self.SHAPE[1].index(p)]
+                    if np.isnan(expected):
+                        self.assertTrue(np.isnan(value))
+                    else:
+                        self.assertEqual(value, expected)
+
+    def test_the_period_lengths_add_up_to_the_stalling_cycles(self) -> None:
+        with redirect_stdout(io.StringIO()):
+            records = stall_grid.run_grid(*self.SHAPE, 4, 200, workers=1)
+        for record in records:
+            for detector in stall_grid.DETECTORS:
+                lengths = [int(v) for v in record[f"period_lengths_{detector}"].split()]
+                self.assertEqual(sum(lengths), record[f"stalling_cycles_{detector}"])
+                self.assertEqual(max(lengths, default=0), record[f"longest_period_{detector}"])
+
+    def test_the_square_and_line_stall_is_one_period_of_n_stall_minus_one_cycles(self) -> None:
+        A, b = square_line_example.square_line_problem()
+        z = square_line_example.START
+        states = square_line_example.dykstra_cycles(z, A, b, 1)
+        n_stall = square_line_example.stalling_state(A, b, *states[1][:2])["n_stall"]
+        reference = ConvexProjectionSolver._find_optimal_solution(z, A, b)
+        batch = stall_grid.run_batch(z[None], A[None], b[None], reference[None], 40)
+        self.assertEqual(batch["relative_period_lengths"], [[n_stall - 1]])
+
+
 from dykstra.performance_timing import read_records
 
 
