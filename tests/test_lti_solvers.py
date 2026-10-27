@@ -1307,6 +1307,32 @@ class LTISolverRegressionTests(unittest.TestCase):
                 np.testing.assert_allclose(nonnegative_least_squares(C, np.array([1e-6, untouched])),
                                            [1e-6], rtol=1e-12, atol=0.0)
 
+    def test_certificate_accepts_a_support_row_the_step_does_not_move(self) -> None:
+        # In each problem a row through the origin binds at the projection along a
+        # coordinate where z is already zero, so the true step there is zero. Least
+        # squares leaves about 1e-16 of the rest of the correction's rounding in that
+        # coordinate, and a slack floor built from that coordinate alone, about 1e-30,
+        # read the row as inactive or violated, so the true support failed and the
+        # projection was never certified, although Dykstra reaches it to 4e-16 within
+        # 200 cycles
+        cases = {
+            "row not tight": (np.array([-4.0, 0.0]),
+                              np.array([[1.0, 0.0], [0.0, 1.0], [-0.5, -1.0], [0.0, -0.5]]),
+                              np.array([-1.0, 0.0, 1.75, 0.5])),
+            "row not tight, second": (np.array([0.0, 2.0]),
+                                      np.array([[-1.5, -1.0], [-1.0, -1.0], [0.5, 0.5], [-1.0, 0.0]]),
+                                      np.array([0.25, 0.0, 0.5, 0.0])),
+            "row violated": (np.array([4.5, 0.0, 2.5]),
+                             np.array([[-1.5, 1.0, 1.0], [1.5, 0.5, -0.5], [0.0, -0.5, 0.0]]),
+                             np.array([0.5, 1.5, 0.0])),
+        }
+        for case_name, (z, A, b) in cases.items():
+            with self.subTest(case=case_name):
+                solver = LTIVer5Solver(z, A, b, max_iter=200)
+                result = solver.solve()
+                self.assertEqual(result.certificate, "kkt")
+                np.testing.assert_allclose(result.projection, solver.actual_projection, rtol=0.0, atol=1e-12)
+
     def test_nonnegative_quadratic_exchanges_a_dependent_row_for_the_optimum(self) -> None:
         # The dual of projecting z onto three half-planes. Once rows 1 and 2 hold the
         # support, row 0 enters with a positive gradient, but three normals in the plane

@@ -147,6 +147,32 @@ class CSolverTests(unittest.TestCase):
                 np.testing.assert_allclose(lifted.multipliers, plain.multipliers, rtol=0.0, atol=1e-12)
                 self.assertEqual(lifted.projection[position], 1e8)
 
+    def test_certificate_accepts_a_support_row_the_step_does_not_move(self) -> None:
+        # In each problem a row through the origin binds at the projection along a
+        # coordinate where z is already zero. Least squares leaves about 1e-16 of the
+        # rest of the correction's rounding in that coordinate, and a slack floor built
+        # from that coordinate alone, about 1e-30, read the row as inactive or violated,
+        # so the true support failed. None of the three was ever certified, where the
+        # Python certifies the six-row problem on entering cycle 2
+        cases = {
+            "six rows": (np.array([-5.5, 0.0]),
+                         np.array([[0.0, -2.0], [-0.5, 0.5], [-0.5, 0.5], [0.0, 1.0], [1.0, 0.0], [0.5, 1.0]]),
+                         np.array([0.0, 0.75, -0.25, 1.5, 1.5, 1.5])),
+            "row not tight": (np.array([-4.0, 0.0]),
+                              np.array([[1.0, 0.0], [0.0, 1.0], [-0.5, -1.0], [0.0, -0.5]]),
+                              np.array([-1.0, 0.0, 1.75, 0.5])),
+            "row violated": (np.array([4.5, 0.0, 2.5]),
+                             np.array([[-1.5, 1.0, 1.0], [1.5, 0.5, -0.5], [0.0, -0.5, 0.0]]),
+                             np.array([0.5, 1.5, 0.0])),
+        }
+        for case_name, (z, A, b) in cases.items():
+            with self.subTest(case=case_name):
+                result = accelerated_c_projection(z, A, b, 200)
+                self.assertTrue(result.settled)
+                np.testing.assert_allclose(result.projection,
+                                           DykstraProjectionSolver(z, A, b, max_iter=1).actual_projection,
+                                           rtol=0.0, atol=1e-12)
+
     def test_certificate_dual_exchanges_a_dependent_row(self) -> None:
         # Ten rows in the plane, three of them with the normal (-1, 0), give the dual of
         # the candidate rows a singular Gram matrix. Lawson-Hanson met a row dependent on
