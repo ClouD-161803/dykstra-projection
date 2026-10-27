@@ -543,3 +543,201 @@ def map_tasks(function, tasks: list, workers: int) -> list:
         return [function(task) for task in tasks]
     with ProcessPoolExecutor(workers) as pool:
         return list(pool.map(function, tasks))
+
+
+def check_maximum(name: str, maximum: int, candidates: dict, tries: int, horizon: int) -> dict:
+    """Confirm a floating-point maximum in exact arithmetic on a nearby rational instance.
+
+    The candidates are tried in turn, each rounded with the denominators of
+    RATIONAL_DENOMINATORS in turn. A rational instance is accepted once it is in general position,
+    its floating-point run reaches the maximum, and its exact run is certified with the same
+    counts. Returns the accepted instance with both runs, or the reason none was accepted.
+    """
+    attempts = []
+    rows = np.flatnonzero(candidates["values"] == maximum)[:tries]
+    for row in rows:
+        parameters = candidates["parameters"][row]
+        for denominator in RATIONAL_DENOMINATORS:
+            normals, offsets, start = rationalise(parameters, denominator)
+            if not exact_general_position(normals, offsets, start):
+                attempts.append((denominator, "not in general position"))
+                continue
+            runs = float_runs_on(np.array([normals], dtype=float), np.array([offsets], dtype=float),
+                                 np.array([start], dtype=float), horizon)
+            if not usable(runs)[0] or runs[name][0] != maximum:
+                attempts.append((denominator, f"floating point gives {int(runs[name][0])}"))
+                continue
+            exact = exact_run(normals, offsets, start)
+            float_counts = {key: int(runs[key][0]) for key in OBJECTIVES}
+            if exact["certificate"] is None:
+                attempts.append((denominator, "exact run not certified"))
+                continue
+            if exact["counts"] != float_counts:
+                attempts.append((denominator, f"exact counts {exact['counts']}"))
+                continue
+            return {"confirmed": True, "instance": (normals, offsets, start), "exact": exact,
+                    "float_counts": float_counts, "denominator": denominator,
+                    "attempts": attempts}
+    return {"confirmed": False, "attempts": attempts}
+
+
+def verify_counterexamples() -> dict:
+    """Run both counterexamples exactly, print their activity, and return their runs."""
+    results = {}
+    for label, (normals, offsets, start) in COUNTEREXAMPLES.items():
+        if not exact_general_position(normals, offsets, start):
+            raise ValueError(f"counterexample ({label}) is not in general position.")
+        run = exact_run(normals, offsets, start)
+        results[label] = run
+        refuted = [name for name in COUNTS if run["counts"][name] > CLAIMED_BOUNDS[name]]
+        print(f"counterexample ({label}): {instance_text(normals, offsets, start)}")
+        print(f"  exact run certified by {run['certificate']} in cycle {run['cycle']}, active "
+              f"sets by cycle: {set_sequence(run['activity'])}")
+        for m in range(3):
+            print(f"  half-space {m + 1}: {activity_sequence(run['activity'], m)}. "
+                  f"{int(run['activity'][1][m])} change in the opening cycle and "
+                  f"{int(run['after'][m])} after it")
+        print("  counts: " + ", ".join(f"{name} {run['counts'][name]}" for name in OBJECTIVES))
+        print(f"  claims refuted: {', '.join(refuted) if refuted else 'none'}")
+    return results
+
+
+def write_outputs(rows: list) -> tuple:
+    """Write tab-conjecture.tex and conjecture.csv into the output folder, and return the paths."""
+    os.makedirs(paper_figures.OUTPUT_DIR, exist_ok=True)
+    path_csv = os.path.join(paper_figures.OUTPUT_DIR, "conjecture.csv")
+    with open(path_csv, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Wrote {path_csv}")
+    lines = []
+    for row in rows:
+        if row["count"] not in COUNTS:
+            continue
+        lines.append(f"  {COUNT_LABELS[row['count']]} & {row['claimed_bound']} & "
+                     f"{row['observed_maximum']} & {row['instances']} & "
+                     f"{row['counterexample']} \\\\\n")
+    alternative = {row["count"]: row["observed_maximum"] for row in rows
+                   if row["count"] in VIOLATED_COUNTS}
+    text = ("% the largest counts over random and hill-climbed instances, each checked in exact "
+            "arithmetic. Every half-space is inactive before cycle 1, and with cycle 0 taken as "
+            "the rows z violates instead, as in activity_study.py, the largest total is "
+            f"{alternative['total_violated_start']} and the largest count of one half-space is "
+            f"{alternative['per_half_space_violated_start']}\n"
+            "\\begin{tabular}{l r r r l}\n  \\hline\n"
+            "  count & claimed & observed & instances & counterexample \\\\\n  \\hline\n"
+            + "".join(lines) + "  \\hline\n\\end{tabular}\n")
+    path_tex = paper_figures.save_tex(text, "tab-conjecture", "python -m dykstra.activity_conjecture")
+    return path_csv, path_tex
+
+
+def run(quick: bool = False, workers: int | None = None) -> dict:
+    """Verify the counterexamples, sample and hill-climb, check the maxima, and write the outputs."""
+    began = time.perf_counter()
+    cfg = settings(quick)
+    workers = cfg["WORKERS"] if workers is None else workers
+    counterexamples = verify_counterexamples()
+
+    batches = [(SEED + k, min(cfg["SAMPLE_BATCH"], cfg["SAMPLES"] - start), cfg["HORIZON"],
+                cfg["KEEP"]) for k, start in enumerate(range(0, cfg["SAMPLES"], cfg["SAMPLE_BATCH"]))]
+    sampled = map_tasks(sampling_task, batches, workers)
+    sampling_seconds = time.perf_counter() - began
+    best = merge_best([part["best"] for part in sampled], cfg["CLIMB_CHAINS"])
+    totals = {key: sum(part[key] for part in sampled)
+              for key in ("sampled", "undecided", "budget", "fixed", "certified")}
+    histograms = {name: {} for name in OBJECTIVES}
+    for part in sampled:
+        for name in OBJECTIVES:
+            for value, number in part["histogram"][name].items():
+                histograms[name][value] = histograms[name].get(value, 0) + number
+    print(f"sampled {totals['sampled']} random instances in {sampling_seconds:.0f} s: "
+          f"{totals['fixed']} fixed to rounding, {totals['certified']} certified wedge phases, "
+          f"{totals['budget']} at the budget of {cfg['HORIZON']} cycles, {totals['undecided']} "
+          f"undecided, longest usable run {max(part['longest'] for part in sampled)} cycles")
+    for name in OBJECTIVES:
+        print(f"  {name}: instances per value {dict(sorted(histograms[name].items()))}")
+
+    tasks = []
+    for k, name in enumerate(OBJECTIVES):
+        chains = best[name]["parameters"]
+        for g, start in enumerate(range(0, len(chains), cfg["CLIMB_GROUP"])):
+            tasks.append((name, chains[start:start + cfg["CLIMB_GROUP"]], cfg["CLIMB_STEPS"],
+                          cfg["HORIZON"], cfg["KEEP"], SEED + 1_000_000 + 1000 * k + g))
+    climb_began = time.perf_counter()
+    climbed = map_tasks(climb_task, tasks, workers)
+    climb_seconds = time.perf_counter() - climb_began
+    proposals = sum(part["proposals"] for part in climbed)
+    evaluated = sum(part["evaluated"] for part in climbed)
+    usable_proposals = sum(part["usable"] for part in climbed)
+    accepted = sum(part["accepted"] for part in climbed)
+    print(f"hill-climbed {len(tasks) * cfg['CLIMB_GROUP']} chains for {cfg['CLIMB_STEPS']} steps "
+          f"in {climb_seconds:.0f} s: {proposals} proposals, {evaluated} valid and run, "
+          f"{usable_proposals} of them usable, {accepted} accepted")
+    climbed_histograms = {name: {} for name in OBJECTIVES}
+    for part in climbed:
+        for name in OBJECTIVES:
+            for value, number in part["histogram"][name].items():
+                climbed_histograms[name][value] = climbed_histograms[name].get(value, 0) + number
+    for name in OBJECTIVES:
+        print(f"  {name}: usable proposals per value {dict(sorted(climbed_histograms[name].items()))}")
+    found = merge_best([best] + [part["best"] for part in climbed if part["best"] is not None],
+                       cfg["KEEP"])
+
+    rows, checks = [], {}
+    for name in OBJECTIVES:
+        maximum = int(found[name]["values"][0])
+        sampled_maximum = max(histograms[name])
+        check = check_maximum(name, maximum, found[name], cfg["EXACT_CANDIDATES"], cfg["HORIZON"])
+        checks[name] = check
+        bound = CLAIMED_BOUNDS[name]
+        witnesses = [label for label, result in counterexamples.items()
+                     if result["counts"][name] > bound]
+        exceeded = check["confirmed"] and maximum > bound
+        source = [f"counterexample ({label})" for label in witnesses]
+        if exceeded:
+            source.append("the instance of the maximum")
+        counterexample = "yes" if source else "none found"
+        print(f"{name}: claimed {bound}, maximum {maximum} (random sampling alone "
+              f"{sampled_maximum}), exact check "
+              + (f"confirmed on {instance_text(*check['instance'])}, certified by "
+                 f"{check['exact']['certificate']} in cycle {check['exact']['cycle']}, rounded "
+                 f"with denominators up to {check['denominator']}" if check["confirmed"]
+                 else f"failed: {check['attempts']}")
+              + f". Counterexample: {' and '.join(source) if source else 'none found'}")
+        rows.append({"count": name, "claimed_bound": bound, "observed_maximum": maximum,
+                     "random_sampling_maximum": sampled_maximum,
+                     "instances": totals["sampled"] + evaluated,
+                     "sampled": totals["sampled"], "hill_climbed": evaluated,
+                     "counterexample": counterexample,
+                     "counterexample_source": " and ".join(source),
+                     "exact_check": "confirmed" if check["confirmed"] else "failed",
+                     "maximum_instance": instance_text(*check["instance"]) if check["confirmed"]
+                     else "",
+                     "exact_counts": " ".join(f"{key}={value}" for key, value in
+                                              check["exact"]["counts"].items())
+                     if check["confirmed"] else ""})
+    paths = write_outputs(rows)
+    seconds = time.perf_counter() - began
+    print(f"Finished in {seconds:.0f} s ({sampling_seconds:.0f} s sampling, {climb_seconds:.0f} s "
+          f"climbing, {workers} workers): {paths[1]} and {paths[0]}")
+    return {"counterexamples": counterexamples, "rows": rows, "checks": checks,
+            "histograms": histograms, "climbed_histograms": climbed_histograms,
+            "totals": totals, "hill_climbed": evaluated,
+            "seconds": seconds}
+
+
+def main() -> None:
+    """Run the study from the command line."""
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--quick", action="store_true",
+                        help="a reduced study, written to a temporary directory")
+    parser.add_argument("--workers", type=int, default=None, help=f"processes, {WORKERS} by default")
+    arguments = parser.parse_args()
+    if arguments.quick:
+        paper_figures.OUTPUT_DIR = tempfile.mkdtemp(prefix="activity_conjecture_")
+    run(arguments.quick, arguments.workers)
+
+
+if __name__ == "__main__":
+    main()
