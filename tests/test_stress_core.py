@@ -17,6 +17,7 @@ import re
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import warnings
 
 import matplotlib
@@ -30,6 +31,7 @@ WORKING_VERSION = Path(__file__).resolve().parents[1] / "Python" / "Working Vers
 sys.path.insert(0, str(WORKING_VERSION))
 
 from convex_projection_solver import (
+    ConvexProjectionSolver,
     DykstraMapHybridSolver,
     DykstraProjectionSolver,
     DykstraStallDetectionSolver,
@@ -836,6 +838,33 @@ class BitwiseReferenceTests(unittest.TestCase):
         """Without the tracking flags the iteration, its corrections and its fast-forwards are
         still the recorded ones."""
         self.assert_outputs_are_recorded(UNTRACKED_FIELDS)
+
+
+class RepeatedWorkTests(unittest.TestCase):
+    """Each solver normalises every row once, and tests activity for the record only when
+    plot_active_halfspaces is set. From (-2, 1.4) the box and line make the stall detection
+    solver fast-forward within 10 cycles."""
+
+    z = np.array([-2.0, 1.4])
+
+    def count_calls(self, method, solver_type, solves, **options) -> tuple:
+        """Counts the calls of ConvexProjectionSolver's static method named method while a
+        solver over 10 cycles is constructed and solves the given number of times, and returns
+        the count with what the solver printed."""
+        original = getattr(ConvexProjectionSolver, method)
+        log = io.StringIO()
+        with mock.patch.object(ConvexProjectionSolver, method, side_effect=original) as counted:
+            solver = solver_type(self.z, BOX_LINE_A, BOX_LINE_B, 10, **options)
+            with contextlib.redirect_stdout(log):
+                for _ in range(solves):
+                    solver.solve()
+        return counted.call_count, log.getvalue()
+
+    def test_each_row_is_normalised_once_per_solver(self) -> None:
+        for solver_type in SOLVERS:
+            with self.subTest(solver=solver_type.__name__):
+                count, _ = self.count_calls("_normalise", solver_type, 2, **TRACKING_FLAGS)
+                self.assertEqual(count, len(BOX_LINE_B))
 
 
 if __name__ == "__main__":
