@@ -461,7 +461,10 @@ def envelope_bounds_pgfplots(crossings: dict) -> str:
     lower, upper = n(crossings["lower"]), n(crossings["upper"])
     switch, reactivation = n(crossings["switch"], 3), n(crossings["reactivation"], 3)
     line = f"{level} - {abs(ENVELOPE_DRIFT):g}*x" if ENVELOPE_DRIFT < 0 else f"{level} + {drift}*x"
-    return rf"""\begin{{figure}}[htbp]
+    return rf"""% Illustrative constants: G = {level}, beta = {drift}, alpha = {amplitude}, rho = {rho} (left),
+% Gamma = {floor} with amplitude {transient} (right). The crossings are those of
+% envelope_crossings() in dykstra/paper_figures.py of the code repository.
+\begin{{figure}}[htbp]
   \centering
   \begin{{tikzpicture}}
     \begin{{axis}}[compactaxis, width=0.48\linewidth, height=0.46\linewidth,
@@ -499,9 +502,9 @@ def envelope_bounds_pgfplots(crossings: dict) -> str:
     \begin{{axis}}[compactaxis, width=0.48\linewidth, height=0.46\linewidth,
                  xmin=0, xmax=14, ymin=-1.6, ymax=0.55,
                  xlabel={{cycles ahead $\ell$}}, ylabel={{$g_j^{{(t+\ell)}}$}},
-                 title={{inactive ($\beta = 0$)}},
+                 title={{inactive ($\Gamma_j < 0$)}},
                  legend pos=north east]
-      % only this window admits a reactivation
+      % only this window admits an activation
       \fill[figred, opacity=0.08] (axis cs:0,-1.6) rectangle (axis cs:{reactivation},0.55);
       \addplot[figblue, thick, forget plot, domain=0:14, samples=200, name path=upperB]
         {{{floor} + {transient}*{rho}^x}};
@@ -516,13 +519,13 @@ def envelope_bounds_pgfplots(crossings: dict) -> str:
       \draw[figred, dotted] (axis cs:{reactivation},-1.6) -- (axis cs:{reactivation},0.55);
       \node[figred, font=\tiny, anchor=north] at (axis cs:{reactivation},-1.16) {{$\ell_j^\star$}};
       \node[figred, font=\tiny, align=center, anchor=south]
-        at (axis cs:1.85,0.25) {{reactivation\\possible}};
+        at (axis cs:1.85,0.25) {{activation\\possible}};
       \node[figblue, font=\tiny, anchor=west] at (axis cs:7,-0.1) {{$U_j(\ell)$}};
-      \node[figblue, font=\tiny, anchor=west] at (axis cs:5.0,-1.) {{$\Gamma_j - \| z_j^{{(t)}} \|_2 \rho^\ell$}};
+      \node[figblue, font=\tiny, anchor=west] at (axis cs:4.2,-1.) {{$\Gamma_j - \| R_j \| \, \| z_1^{{(t)}} \| \rho^\ell$}};
       \node[figink, font=\tiny, anchor=west] at (axis cs:0.8,-0.40) {{$\Gamma_j$}};
     \end{{axis}}
   \end{{tikzpicture}}
-  \caption{{The two families of envelopes of \cref{{subsec:regular}}, for one representative episode with $\rho = {rho}$. On the left, an active half-space has a negative drift, hence its auxiliary variable must reach zero, and the lower and upper bounds bracket the switch in $[\ell_m^\star, \bar{{\ell}}_m]$. On the right, the slack of an inactive half-space decays towards a negative floor, hence a reactivation is possible only while the upper bound is still positive, i.e.\ for $\ell < \ell_j^\star$.}}%
+  \caption{{Envelopes of \cref{{subsec:regular}} for illustrative constants with $\rho = {rho}$. An active half-space with a negative drift (left) has an auxiliary variable that must reach zero between the crossings $\ell_m^\star$ and $\bar{{\ell}}_m$ of its lower and upper bounds. An inactive half-space (right) has a slack that decays towards a negative floor, and it can activate only for $\ell < \ell_j^\star$, while its upper bound is positive.}}%
   \label{{fig:envelopes}}
 \end{{figure}}
 """
@@ -591,12 +594,12 @@ def envelope_bounds_figure() -> dict:
     right.axvspan(0, reactivation, color=RED, alpha=0.08, lw=0)
     right.axvline(reactivation, color=RED, lw=0.9, ls=":")
     right.text(reactivation, -1.52, r"$\ell_j^\star$", color=RED, ha="center", fontsize=10)
-    right.text(reactivation / 2, 0.28, "reactivation\npossible", color=RED,
+    right.text(reactivation / 2, 0.28, "activation\npossible", color=RED,
                ha="center", fontsize=8)
     right.annotate(r"upper bound $U_j(\ell)$", (1.5, floor + transient * rho ** 1.5),
                    (4.0, 0.28), color=BLUE, fontsize=9,
                    arrowprops=dict(arrowstyle="-", color=BLUE, lw=0.7))
-    right.annotate(r"lower bound $\Gamma_j - \|z_j^{(t)}\|_2\,\rho^\ell$",
+    right.annotate(r"lower bound $\Gamma_j - \|R_j\|\,\|z_1^{(t)}\|\,\rho^\ell$",
                    (2.5, floor - transient * rho ** 2.5), (5.5, -1.25),
                    color=BLUE, fontsize=9,
                    arrowprops=dict(arrowstyle="-", color=BLUE, lw=0.7))
@@ -604,7 +607,7 @@ def envelope_bounds_figure() -> dict:
     right.legend(fontsize=8, frameon=False, loc="lower right")
     right.set_xlabel(r"cycles ahead $\ell$")
     right.set_ylabel(r"$g_j^{(t+\ell)}$")
-    right.set_title(r"inactive ($\beta = 0$)", fontsize=10)
+    right.set_title(r"inactive ($\Gamma_j < 0$)", fontsize=10)
     right.set_xlim(0, 14)
     right.set_ylim(-1.6, 0.55)
     style_axes(right)
