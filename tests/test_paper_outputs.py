@@ -819,5 +819,77 @@ class BenchmarkFamilyRunTests(unittest.TestCase):
         self.assertIn(r"{l cc|cc|cc}", combined)
 
 
+from contextlib import redirect_stdout
+import io
+
+from dykstra import cost_model
+from dykstra.lti_solver import STAGES
+
+
+@unittest.skipUnless(c_solvers.libraries_built(), "needs the C solvers: make -C C")
+class CostModelTests(unittest.TestCase):
+    def test_a_quick_run_writes_one_row_per_tier_and_wedge_cell(self) -> None:
+        problems = cost_model.problem_list(cost_model.QUICK_TIERS, cost_model.QUICK_SEEDS,
+                                           cost_model.QUICK_WEDGE_CELLS, cost_model.QUICK_WEDGE_PROBLEMS)
+        repeats = cost_model.REPEATS, cost_model.REPEAT_SECONDS
+        cost_model.REPEATS, cost_model.REPEAT_SECONDS = 1, 0.0
+        try:
+            with redirected_output() as directory, redirect_stdout(io.StringIO()):
+                cost_model.run(problems, "python -m dykstra.cost_model --quick")
+                written = {path.name for path in directory.iterdir()}
+                rows = [line for line in (directory / "tab-cost-model.tex").read_text().splitlines()
+                        if line.endswith("\\\\")]
+                records = cost_model.read_csv("cost_model_problems")
+                tests = cost_model.read_csv("cost_model_kkt")
+        finally:
+            cost_model.REPEATS, cost_model.REPEAT_SECONDS = repeats
+        self.assertTrue({"tab-cost-model.tex", "cost_model.csv", "cost_model_problems.csv",
+                         "cost_model_kkt.csv", "cost_model_fits.csv"} <= written)
+        self.assertEqual(len(rows), len(cost_model.QUICK_TIERS) + len(cost_model.QUICK_WEDGE_CELLS))
+        for row in rows:
+            self.assertEqual(row.count("&"), len(cost_model.SUMMARY_COLUMNS))
+        self.assertEqual(len(records), len(problems))
+        self.assertEqual(len(tests), sum(record["count_kkt_attempts"] for record in records))
+        for record in records:
+            with self.subTest(n=record["n"], p=record["p"], theta=record["theta"]):
+                self.assertEqual(record["c_exact_cycles"], record["count_exact_cycles"])
+                self.assertLess(record["python_squared_error"], 1e-18)
+
+    def test_the_c_counters_agree_with_the_python_profile(self) -> None:
+        for index in range(5):
+            A, b, z = problem_generators.problem(24, 8, problem_generators.problem_seed(24, index))
+            solver = LTIVer5Solver(z, A, b, cost_model.CAP, profile=True)
+            solver.solve()
+            counts = solver.profile["counts"]
+            result = c_solvers.accelerated_c_projection(z, A, b, cost_model.CAP)
+            with self.subTest(index=index):
+                self.assertEqual(result.exact_cycles, counts["exact_cycles"])
+                self.assertEqual(result.switches + 1, counts["episodes"])
+                # the C solver bounds the contraction rate by power iteration, so its envelope
+                # jumps can split the same cycles otherwise between evaluated and skipped
+                self.assertEqual(result.cycles - result.exact_cycles,
+                                 counts["evaluated_cycles"] + counts["skipped_cycles"])
+
+    def test_an_episode_costs_its_share_of_the_run_beyond_its_exact_cycles(self) -> None:
+        # Four episodes cover 40 cycles beyond their exact cycles. In C the run takes 50 us, 10 us
+        # of them the fixed cost of a call and 4 us its exact cycles, so an episode costs 9 us,
+        # nine C Dykstra cycles, and pays
+        record = {f"seconds_{stage}": 0.0 for stage in STAGES}
+        record.update({"count_episodes": 4, "count_exact_cycles": 4, "count_evaluated_cycles": 30,
+                       "count_skipped_cycles": 10, "count_kkt_attempts": 5, "c_exact_cycles": 4,
+                       "c_dykstra_seconds_per_cycle": 1e-6, "python_dykstra_seconds_per_cycle": 1e-4,
+                       "c_seconds": 50e-6, "c_call_seconds": 10e-6, "python_seconds": 2e-3,
+                       "c_one_cycle_seconds": 12e-6, "c_two_cycle_seconds": 20e-6,
+                       "dykstra_cycles_to_tolerance": 100, "dykstra_cycles_to_tight": 1000,
+                       "c_dykstra_seconds_to_tolerance": 110e-6, "c_dykstra_seconds_to_tight": 1010e-6,
+                       "python_settled_at": 45})
+        values = cost_model.derived(record)
+        self.assertAlmostEqual(values["c_us_per_episode"], 9.0)
+        self.assertAlmostEqual(values["c_breakeven_cycles"], 9.0)
+        self.assertAlmostEqual(values["cycles_per_episode"], 10.0)
+        self.assertAlmostEqual(values["python_breakeven_cycles"], 4.0)
+        self.assertAlmostEqual(values["c_speedup"], 2.2)
+
+
 if __name__ == "__main__":
     unittest.main()
