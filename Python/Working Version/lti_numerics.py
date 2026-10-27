@@ -98,6 +98,8 @@ def cycle_map(unit_A: np.ndarray, unit_b: np.ndarray, active: tuple) -> CycleMap
     R_scale = np.zeros((n, p))
     s = np.zeros(n)
     s_scale = np.zeros(n)
+    # The magnitudes of P change only at an active half-space
+    abs_P = np.abs(P)
     for m in range(n):
         normal, offset = unit_A[m], unit_b[m]
 
@@ -105,7 +107,7 @@ def cycle_map(unit_A: np.ndarray, unit_b: np.ndarray, active: tuple) -> CycleMap
         # that repeats the last active one before it R_m cancels to rounding, so floors
         # use R_scale
         R[m] = P.T @ normal
-        R_scale[m] = np.abs(P).T @ np.abs(normal)
+        R_scale[m] = abs_P.T @ np.abs(normal)
         s[m] = float(normal @ q) - offset
         s_scale[m] = float(np.abs(normal) @ np.abs(q)) + abs(offset)
 
@@ -114,6 +116,7 @@ def cycle_map(unit_A: np.ndarray, unit_b: np.ndarray, active: tuple) -> CycleMap
             M = np.eye(p) - np.outer(normal, normal)
             P = M @ P
             q = M @ q + offset * normal
+            abs_P = np.abs(P)
 
     # A coordinate no constraint touches is not part of the problem: the SVD can leave
     # rounding in its row of the span, which advance would add to it every cycle
