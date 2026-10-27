@@ -454,3 +454,131 @@ def write_csv(rows: list[dict], name: str) -> str:
         writer.writerows(rows)
     print(f"Wrote {path}")
     return path
+
+
+def print_method() -> None:
+    """Print the machine and the timing method."""
+    for key, value in performance_timing.machine_description().items():
+        print(f"{key}: {value}")
+    print(f"load averages: {', '.join(f'{load:.2f}' for load in os.getloadavg())}")
+    print(f"method: every time the median of at least {REPEATS} runs, continued until they total "
+          f"{REPEAT_SECONDS} s or number {MAX_REPEATS}; Dykstra cycles timed over "
+          f"{PYTHON_DYKSTRA_CYCLES} cycles in Python and as the difference of {C_DYKSTRA_CYCLES} "
+          f"cycles and one in C; accelerated runs to settlement or {CAP} cycles, Python in solve() "
+          f"alone and profiled in alternation with an unprofiled solve, C as whole calls")
+
+
+def report(records: list[dict], tests: list[dict], command: str) -> list[dict]:
+    """Write every output, and print the rows, the fits and the break-even of each row."""
+    summary = summarise(records)
+    fits = fit_stages(records)
+    write_csv(records, "cost_model_problems")
+    write_csv(tests, "cost_model_kkt")
+    write_csv(summary, "cost_model")
+    write_csv(fits, "cost_model_fits")
+    text = table_header(summary) + table_rows(summary)
+    save_tex(text, "tab-cost-model", command)
+    print(text)
+    for fit in fits:
+        print(f"fit {fit['stage']}: {fit['ns_per_flop']:.3g} ns per flop ({fit['gflops']:.3g} "
+              f"GFlop/s) and {fit['us_per_count']:.3g} us per {fit['count']}, median relative "
+              f"residual {fit['median_relative_residual']:.2f}, largest "
+              f"{fit['largest_relative_residual']:.2f}, over {fit['problems']} problems")
+    for row in summary:
+        name = (f"{row['n']} x {row['p']}" if row["family"] == "tier"
+                else f"wedge p = {row['p']}, theta = {row['theta']:g}")
+        print(f"{name}: an episode costs {row['c_us_per_episode']:.3g} us in C, "
+              f"{row['c_breakeven_cycles']:.3g} C Dykstra cycles, and "
+              f"{row['python_us_per_episode']:.3g} us in Python, "
+              f"{row['python_breakeven_cycles']:.3g} Python Dykstra cycles, of which its entry "
+              f"takes {row['python_entry_breakeven_cycles']:.3g}; it covers "
+              f"{row['cycles_per_episode']:.3g} cycles beyond its exact cycle, and pays in C on "
+              f"{row['episodes_paying_c']} of {row['problems']} problems. Runs to settlement beat "
+              f"Dykstra to the tolerance on {row['runs_paying_c']} problems in C and "
+              f"{row['runs_paying_python']} in Python, median speedups "
+              f"{row['c_speedup']:.3g} and {row['python_speedup']:.3g}, and Dykstra to squared error "
+              f"{TIGHT_TOLERANCE:g} on {row['runs_paying_c_tight']} in C, median speedups "
+              f"{row['c_speedup_tight']:.3g} and {row['python_speedup_tight']:.3g}, with Dykstra at "
+              f"a median of {row['dykstra_cycles_to_tolerance']:.0f} and "
+              f"{row['dykstra_cycles_to_tight']:.0f} cycles, "
+              f"{row['dykstra_reached_tight']} of {row['problems']} within {CAP}")
+    return summary
+
+
+def read_csv(name: str) -> list[dict]:
+    """Rows written by write_csv, with their numbers and flags restored."""
+    def value(text: str):
+        if text in ("True", "False"):
+            return text == "True"
+        for kind in (int, float):
+            try:
+                return kind(text)
+            except ValueError:
+                pass
+        return text
+
+    with open(os.path.join(paper_figures.OUTPUT_DIR, name + ".csv"), newline="",
+              encoding="utf-8") as handle:
+        return [{key: value(text) for key, text in row.items()} for row in csv.DictReader(handle)]
+
+
+def warm_up() -> None:
+    """Load the C libraries and run every solver once, so that no timing includes a first call."""
+    A, b, z = problem(12, 4, problem_seed(12, 0))
+    c_solvers.dykstra_c_projection(z, A, b, 2)
+    c_solvers.accelerated_c_projection(z, A, b, 2)
+    DykstraProjectionSolver(z, A, b, 2).solve()
+    LTIVer5Solver(z, A, b, 2, profile=True).solve()
+
+
+def run(problems: list, command: str) -> list[dict]:
+    """Measure every problem, printing each as it finishes, and write the outputs."""
+    print_method()
+    warm_up()
+    records, tests = [], []
+    for arguments in problems:
+        started = time.perf_counter()
+        record, problem_tests = measure_problem(*arguments)
+        records.append(record)
+        tests += problem_tests
+        print(f"{arguments[0]} {record['n']} x {record['p']}"
+              + (f" theta {record['theta']:g}" if arguments[0] == "wedge" else "")
+              + f" index {record['index']}: settled at {record['python_settled_at']}, "
+              f"{record['count_episodes']} episodes, Python {record['python_seconds']:.3g} s, C "
+              f"{record['c_seconds']:.3g} s ({time.perf_counter() - started:.1f} s)", flush=True)
+    return report(records, tests, command)
+
+
+def main() -> None:
+    """Parse the command line and run."""
+    global REPEATS, REPEAT_SECONDS
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--quick", action="store_true",
+                        help="two small tiers and two wedge cells, one problem each and one run "
+                             "per time, written to a temporary directory")
+    parser.add_argument("--from-csv", action="store_true",
+                        help="rebuild the outputs from results/paper/cost_model_problems.csv and "
+                             "cost_model_kkt.csv")
+    args = parser.parse_args()
+    if not c_solvers.libraries_built():
+        sys.exit(f"cost_model needs the C solvers: build them with make -C {c_solvers.C_FOLDER}")
+    quiet_accelerate_warnings()
+    command = " ".join(["python -m dykstra.cost_model", *sys.argv[1:]])
+    began = time.perf_counter()
+    if args.quick:
+        REPEATS, REPEAT_SECONDS = 1, 0.0
+        paper_figures.OUTPUT_DIR = tempfile.mkdtemp(prefix="cost_model_")
+        run(problem_list(QUICK_TIERS, QUICK_SEEDS, QUICK_WEDGE_CELLS, QUICK_WEDGE_PROBLEMS), command)
+    elif args.from_csv:
+        print_method()
+        report(read_csv("cost_model_problems"), read_csv("cost_model_kkt"), command)
+    else:
+        cells = tuple((p, theta) for p in WEDGE_DIMENSIONS for theta in WEDGE_ANGLES)
+        run(problem_list(TIERS, SEEDS, cells, WEDGE_PROBLEMS), command)
+    print(f"Finished in {time.perf_counter() - began:.0f} s: tab-cost-model.tex, cost_model.csv, "
+          f"cost_model_problems.csv, cost_model_kkt.csv and cost_model_fits.csv in "
+          f"{paper_figures.OUTPUT_DIR}")
+
+
+if __name__ == "__main__":
+    main()
