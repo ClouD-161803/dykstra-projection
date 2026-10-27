@@ -1,11 +1,12 @@
 """Numerical pieces of the LTI solvers and the oracle, free of solver state: the exact
 Dykstra cycle in scalar auxiliaries, the cycle map of an episode and its closed-form
-constants, the envelope horizon, the frozen-stall crossing, the KKT certificate, and the
-work of each piece in flops."""
+constants, the envelope horizon, the frozen-stall crossing, the KKT certificate, the
+work of each piece in flops, and the schedule of the KKT test with the work it counts."""
 
 from collections import namedtuple
 from functools import wraps
 from itertools import combinations
+from math import comb
 import numpy as np
 
 # Rounding allowed, in units of eps times the magnitudes that cancel, before a
@@ -491,16 +492,22 @@ class KKTMemo:
 
 
 @ignore_blas_flags
+def kkt_candidates(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray, hint: np.ndarray,
+                   active: np.ndarray) -> np.ndarray:
+    """Candidate rows of the KKT test at hint: the active set and every row near the hint."""
+    slacks = unit_A @ hint - unit_b
+    near = slacks >= -_KKT_CANDIDATE_TOL * _kkt_slack_scale(z, unit_A, unit_b, hint)
+    return np.where(np.asarray(active, dtype=bool) | near)[0]
+
+
+@ignore_blas_flags
 def kkt_certificate(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray,
                     hint: np.ndarray, active: np.ndarray, memo: KKTMemo | None = None,
                     tally=None) -> tuple | None:
     """Projection and multipliers, if proven, adding the test's flops to tally if a KKTTally is
     given."""
-    # Candidate rows: the active set and every row near the hint
     active = np.asarray(active, dtype=bool)
-    slacks = unit_A @ hint - unit_b
-    near = slacks >= -_KKT_CANDIDATE_TOL * _kkt_slack_scale(z, unit_A, unit_b, hint)
-    rows = np.where(active | near)[0]
+    rows = kkt_candidates(z, unit_A, unit_b, hint, active)
     memo = KKTMemo() if memo is None else memo
     if tally is not None:
         tally.candidates = rows.size
@@ -783,3 +790,111 @@ class KKTTally:
             self.solve(*shape(support))
             return solve(support)
         return counted_gradient, counted_solve
+
+
+# ---- the schedule of the KKT test
+
+# Values of LTISolver's schedule, whose index C/accelerated.c takes in their place, and the
+# one LTISolver and c_solvers.accelerated_c_projection use unless given another
+SCHEDULES = ("work", "every", "doubling", "never")
+DEFAULT_SCHEDULE = "work"
+
+# The schedule prices work in flops from sizes the Python and the C share: n half-spaces, p
+# coordinates some constraint touches, m half-spaces active in the phase, c candidate rows of a
+# KKT test, and the cycles a phase covers, each priced as a Dykstra cycle whether the phase
+# evaluated it or jumped it. The two languages part on the split of a phase's cycles between
+# evaluated and jumped, since the C bounds the contraction rate by power iteration, on the
+# iterations of Lawson-Hanson, and near the cutoff on the type of a phase, hence none of these
+# enters, and both try the test at the same phase entries. Sums saturate at WORK_CAP, the largest
+# 64-bit integer of the C
+WORK_CAP = 2 ** 63 - 1
+
+
+def cycle_work(n: int, p: int, m: int) -> int:
+    """Work of a Dykstra cycle with m half-spaces active, the price of an exact cycle and of every
+    cycle a phase covers."""
+    return 4 * n * p + 2 * m * p
+
+
+def cycle_map_work(n: int, p: int, m: int) -> int:
+    """Work of a cycle map: a row of R and of its magnitudes at every half-space, and a rank-one
+    update of the prefix map at every active one."""
+    return 4 * n * p * p + 4 * m * p * p
+
+
+def phase_setup_work(n: int, p: int) -> int:
+    """Work of a phase's setup after its entry test, whatever its type: a factorisation of
+    I - A_m, the n solves of R (I - A_m)^-1, and the levels and drifts of every auxiliary."""
+    return 2 * p ** 3 // 3 + 2 * n * p * p + 14 * n * p
+
+
+def support_work(n: int, p: int, s: int) -> int:
+    """Work of verifying a support of s rows: the slacks and the residual over every row, and two
+    least-squares solves of s rows in p coordinates."""
+    return 6 * n * p + 2 * lstsq_flops(s, p)
+
+
+def kkt_test_work(n: int, p: int, m: int, c: int) -> int:
+    """Work of a KKT test that fails, with c candidate rows of which m are active: the candidates,
+    the dual and the cone program over the candidate rows, each priced as one least-squares solve,
+    and the verification of every support tried, the two derived ones at min(c, p) rows and,
+    when c is at most _KKT_EXHAUSTIVE_ROWS, every subset of the candidates at its size."""
+    work = 4 * n * p
+    if c == 0:
+        return work + support_work(n, p, 0)
+    work += (2 * c * c * p + lstsq_flops(c, c) + 2 * lstsq_flops(c, p)
+             + 2 * support_work(n, p, min(c, p)) + support_work(n, p, m) + support_work(n, p, c))
+    if c <= _KKT_EXHAUSTIVE_ROWS:
+        work += sum(comb(c, size) * support_work(n, p, size) for size in range(1, c + 1))
+    return work
+
+
+def scaled_work(count: int, work: int) -> int:
+    """count times work, saturated at WORK_CAP."""
+    return min(count * work, WORK_CAP)
+
+
+class KKTSchedule:
+    """When the deflated_modal preset tries the KKT test at a phase entry, and the work it counts.
+
+    "work" tries the test at the first entry and afterwards only once the work done since the
+    last failed entry test exceeds that test's work, hence the failed entry tests but the last
+    cost at most the rest of the work. "every" tries it at every entry, "doubling" at entries 1,
+    2, 4, 8 and so on, and "never" nowhere. The tests at the limit of a singular phase and at a
+    final active set do not depend on the schedule except under "never", which drops them too.
+    """
+
+    def __init__(self, schedule: str) -> None:
+        self.schedule = schedule
+        self.entries = 0
+        self.entry_tests = 0
+        # Work since the last failed entry test, and that test's work, None before the first
+        self.since = 0
+        self.debt = None
+        # Totals of a solve: the work of the failed entry tests and all other work
+        self.failed_entry_work = 0
+        self.work = 0
+
+    def entry(self) -> bool:
+        """Counts a phase entry and says whether the test is tried there."""
+        self.entries += 1
+        if self.schedule == "every":
+            attempt = True
+        elif self.schedule == "doubling":
+            attempt = self.entries & (self.entries - 1) == 0
+        elif self.schedule == "work":
+            attempt = self.debt is None or self.since > self.debt
+        else:
+            attempt = False
+        self.entry_tests += int(attempt)
+        return attempt
+
+    def add(self, work: int) -> None:
+        """Counts work other than a KKT test."""
+        self.since = min(self.since + work, WORK_CAP)
+        self.work = min(self.work + work, WORK_CAP)
+
+    def failed(self, work: int) -> None:
+        """Counts an entry test that failed, at its work."""
+        self.debt, self.since = work, 0
+        self.failed_entry_work = min(self.failed_entry_work + work, WORK_CAP)

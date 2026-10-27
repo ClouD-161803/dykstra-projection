@@ -1536,13 +1536,13 @@ def timing_problem(seed: int) -> tuple:
 
 class LTIOverheadTests(unittest.TestCase):
     def test_kkt_test_verifies_each_support_and_solves_each_dual_once_per_solve(self) -> None:
-        # Seed 3 tries the KKT test at six episode entries before cycle 11 certifies.
-        # Without the memo it verified 19 supports, 9 of them distinct
+        # Under the schedule every, seed 3 tries the KKT test at six episode entries before
+        # cycle 11 certifies. Without the memo it verified 19 supports, 9 of them distinct
         z, A, b = timing_problem(3)
         with mock.patch.object(lti_numerics, "_kkt_verify", wraps=lti_numerics._kkt_verify) as verify, \
                 mock.patch.object(lti_numerics, "nonnegative_quadratic",
                                   wraps=lti_numerics.nonnegative_quadratic) as dual:
-            result = LTIVer5Solver(z, A, b, 11, dimensions=8).solve()
+            result = LTIVer5Solver(z, A, b, 11, dimensions=8, schedule="every").solve()
         self.assertEqual(result.certificate, "kkt")
         supports = [tuple(call.args[3]) for call in verify.call_args_list]
         self.assertEqual(len(supports), len(set(supports)))
@@ -1553,12 +1553,15 @@ class LTIOverheadTests(unittest.TestCase):
         def memo_free(*args):
             return lti_numerics.kkt_certificate(*args[:5])
 
+        # under the schedule every, which tries the most tests
         z, A, b = timing_problem(3)
         for budget in (6, 11, 64):
             with self.subTest(budget=budget):
                 with mock.patch.object(lti_solver, "kkt_certificate", memo_free):
-                    reference = LTIVer5Solver(z, A, b, budget, track_error=True, dimensions=8).solve()
-                result = LTIVer5Solver(z, A, b, budget, track_error=True, dimensions=8).solve()
+                    reference = LTIVer5Solver(z, A, b, budget, track_error=True, dimensions=8,
+                                              schedule="every").solve()
+                result = LTIVer5Solver(z, A, b, budget, track_error=True, dimensions=8,
+                                       schedule="every").solve()
                 self.assertEqual(result.settled_at, reference.settled_at)
                 self.assertEqual(result.certificate, reference.certificate)
                 np.testing.assert_array_equal(result.projection, reference.projection)
@@ -1599,7 +1602,7 @@ class LTIOverheadTests(unittest.TestCase):
 def profiled_problems() -> dict:
     """Problems whose solves enter every stage that LTISolver(profile=True) times."""
     # timing_problem(0) jumps 169 cycles by its envelope and timing_problem(3) certifies at
-    # cycle 11 after reusing work in its KKT tests. The singular problem scans its episodes in
+    # cycle 14 after reusing work in its KKT tests. The singular problem scans its episodes in
     # modal form, and the last two fast-forward frozen stalls, one of them part-way through an
     # episode
     r2 = np.sqrt(2.0)
@@ -1676,15 +1679,16 @@ class LTIProfileTests(unittest.TestCase):
                 self.assertEqual(profile["settled_by"] is None, profiled.settled_at is None)
 
     def test_the_cost_of_a_kkt_test_without_the_memo_is_what_it_costs_without_one(self) -> None:
-        # Seed 3 reuses derived supports and rejected ones in its six KKT tests before cycle 11
+        # Under the schedule every, seed 3 reuses derived supports and rejected ones in its six
+        # KKT tests before cycle 11
         def memo_free(*args, tally=None):
             return lti_numerics.kkt_certificate(*args[:5], tally=tally)
 
         z, A, b = timing_problem(3)
-        solver = LTIVer5Solver(z, A, b, 64, profile=True, dimensions=8)
+        solver = LTIVer5Solver(z, A, b, 64, profile=True, dimensions=8, schedule="every")
         solver.solve()
         with mock.patch.object(lti_solver, "kkt_certificate", memo_free):
-            fresh = LTIVer5Solver(z, A, b, 64, profile=True, dimensions=8)
+            fresh = LTIVer5Solver(z, A, b, 64, profile=True, dimensions=8, schedule="every")
             fresh.solve()
         tests, fresh_tests = solver.profile["kkt_tests"], fresh.profile["kkt_tests"]
         self.assertEqual(len(tests), len(fresh_tests))

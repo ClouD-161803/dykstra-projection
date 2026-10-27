@@ -15,7 +15,10 @@ to the one before, so that their effect can be compared:
                     settles only on a point that passes the KKT test (Ver5)
 
 Every preset returns Dykstra's own iterate after max_iter cycles unless it settles;
-then it returns the limit, from the cycle recorded in settled_at on.
+then it returns the limit, from the cycle recorded in settled_at on. The schedule setting
+decides at which phase entries deflated_modal tries the KKT test, as KKTSchedule in
+lti_numerics describes, and after each solve kkt_record holds the KKT tests run and the work
+the schedule counted.
 
 A solver built with profile=True also leaves, after each solve, the wall time and the
 flops of every stage in STAGES and the counts in COUNTS in its profile attribute, as
@@ -27,18 +30,21 @@ from functools import wraps
 import time
 import numpy as np
 from dykstra.convex_projection_solver import ConvexProjectionSolver
-from dykstra.lti_numerics import (RESOLVENT_COND_CAP, RHO_CAP, ClosedForm, CycleMap, KKTMemo,
-                                  KKTTally, active_auxiliaries, active_set_is_final, advance,
+from dykstra.lti_numerics import (DEFAULT_SCHEDULE, RESOLVENT_COND_CAP, RHO_CAP, SCHEDULES,
+                                  ClosedForm, CycleMap, KKTMemo, KKTSchedule, KKTTally,
+                                  active_auxiliaries, active_set_is_final, advance,
                                   auxiliary_floor, budget_jump_flops, closed_form,
                                   closed_form_activity, closed_form_cycle_flops,
-                                  closed_form_flops, cycle_map, cycle_map_flops,
-                                  deflated_closed_form, deflated_closed_form_flops, exact_cycle,
-                                  exact_cycle_flops, frozen_probe_flops, ignore_blas_flags,
-                                  is_frozen, jump_landing_flops, jump_length, jump_length_flops,
-                                  kkt_certificate, modal_block_flops, modal_form_flops,
-                                  predicted_activity, replay_flops, resolvent_flops,
-                                  rounding_floor, stall_crossing, stall_flops,
-                                  stepped_cycle_flops, touched_resolvent, unit_constraints)
+                                  closed_form_flops, cycle_map, cycle_map_flops, cycle_map_work,
+                                  cycle_work, deflated_closed_form, deflated_closed_form_flops,
+                                  exact_cycle, exact_cycle_flops, frozen_probe_flops,
+                                  ignore_blas_flags, is_frozen, jump_landing_flops, jump_length,
+                                  jump_length_flops, kkt_candidates, kkt_certificate,
+                                  kkt_test_work, modal_block_flops, modal_form_flops,
+                                  phase_setup_work, predicted_activity, replay_flops,
+                                  resolvent_flops, rounding_floor, scaled_work, stall_crossing,
+                                  stall_flops, stepped_cycle_flops, touched_resolvent,
+                                  unit_constraints)
 from dykstra.projection_result import ProjectionResult
 
 PRESETS = ("cycle_map", "closed_form", "envelope", "frozen_stall", "deflated_modal")
@@ -153,7 +159,8 @@ class LTISolver(ConvexProjectionSolver):
     PRESET = "deflated_modal"
 
     def __init__(self, *args, preset: str | None = None, eig_cond_cap: float = 1e8,
-                 block_size: int = 4096, profile: bool = False, **kwargs) -> None:
+                 block_size: int = 4096, profile: bool = False,
+                 schedule: str = DEFAULT_SCHEDULE, **kwargs) -> None:
         """
         Initialise the solver; the other arguments are those of ConvexProjectionSolver.
 
@@ -164,6 +171,16 @@ class LTISolver(ConvexProjectionSolver):
             block_size: Cycles the deflated_modal scan evaluates at once.
             profile: Whether each solve leaves its SolveProfile.as_dict record in
                 self.profile, which is None otherwise.
+            schedule: One of SCHEDULES, where the deflated_modal preset tries the KKT
+                test, which no other preset runs; DEFAULT_SCHEDULE unless given. "work"
+                tries it at the first phase entry and afterwards only once the work done
+                since the last failed entry test exceeds that test's work, counted in the
+                flops of lti_numerics.cycle_work and the functions beside it, so that the
+                failed entry tests but the last cost at most the rest of the work. "every"
+                tries it at every phase entry, "doubling" at entries 1, 2, 4, 8 and so on,
+                and all three keep the tests at the limit of a singular phase and at a final
+                active set. "never" runs no KKT test at all, hence the preset never settles
+                and returns Dykstra's iterate at the budget.
         """
         preset = self.PRESET if preset is None else preset
         if preset not in PRESETS:
@@ -179,6 +196,8 @@ class LTISolver(ConvexProjectionSolver):
             raise ValueError("block_size must be a positive integer.")
         if not isinstance(profile, (bool, np.bool_)):
             raise ValueError("profile must be True or False.")
+        if not isinstance(schedule, str) or schedule not in SCHEDULES:
+            raise ValueError(f"schedule must be one of {', '.join(SCHEDULES)}.")
 
         super().__init__(*args, **kwargs)
         self.preset = preset
@@ -192,6 +211,8 @@ class LTISolver(ConvexProjectionSolver):
         self._profiling = bool(profile)
         self._profile = None
         self.profile = None
+        self.schedule = schedule
+        self.kkt_record = None
 
     @property
     def settled(self) -> bool:
@@ -218,11 +239,15 @@ class LTISolver(ConvexProjectionSolver):
         self.y = np.zeros(self.n)
         self._recorded_y = np.zeros(self.n)
         self._kkt_memo = KKTMemo()
+        self._schedule = KKTSchedule(self.schedule)
+        self._kkt_attempts = 0
+        # The schedule counts work in the coordinates some constraint touches, as the C does
+        self._touched_count = int(np.count_nonzero(np.any(self.unit_A != 0.0, axis=0)))
 
         # Track error and activity at the initial point
         self._track_error(0)
         self._track_activity(0)
-        if self.n == 0 and self._deflation:
+        if self.n == 0 and self._deflation and self.schedule != "never":
             # Without constraints z is its own projection, as the KKT test proves with no
             # multipliers, and the C solver reports it as settled after no cycle as well
             self.settled_at, self.certificate = 0, "kkt"
@@ -246,6 +271,8 @@ class LTISolver(ConvexProjectionSolver):
             outcome = self._episode(cycle)
             if outcome.kind != "switch":
                 break
+            self._schedule.add(scaled_work(outcome.cycle - cycle, cycle_work(
+                self.n, self._touched_count, int(sum(self.cmap.active)))))
             self.cmap = self._cycle_map(self._exact_cycle(outcome.cycle))
             cycle = outcome.cycle + 1
         return self._format_output()
@@ -265,12 +292,14 @@ class LTISolver(ConvexProjectionSolver):
         if self._profile is not None:
             self._profile.count("exact_cycles", exact_cycle_flops(self.n, self.dimensions, sum(active)),
                                 exact_cycles=1)
+        self._schedule.add(cycle_work(self.n, self._touched_count, int(sum(active))))
         return active
 
     def _cycle_map(self, active: tuple) -> CycleMap:
         """Build the cycle map of an active set."""
         with self._stage("cycle_maps"):
             cmap = cycle_map(self.unit_A, self.unit_b, active)
+        self._schedule.add(cycle_map_work(self.n, self._touched_count, int(sum(active))))
         profile = self._profile
         if profile is not None:
             profile.active, profile.rank = sum(active), cmap.span.shape[1]
@@ -287,10 +316,14 @@ class LTISolver(ConvexProjectionSolver):
 
         # A point that passes the KKT test is the projection whatever the episode
         # would do next, and finding it needs no resolvent
-        if self._deflation:
+        if self._deflation and self._schedule.entry():
             certified = self._kkt(self.x, active, start_cycle, "episode entry")
             if certified is not None:
                 return self._settle_certified(*certified, start_cycle)
+            candidates = kkt_candidates(self.z, self.unit_A, self.unit_b, self.x, active)
+            self._schedule.failed(kkt_test_work(self.n, self._touched_count,
+                                                int(np.count_nonzero(active)), candidates.size))
+        self._schedule.add(phase_setup_work(self.n, self._touched_count))
 
         # Closed form when I - A_m is well conditioned on the touched coordinates, which
         # needs the active normals to span them, and otherwise the deflated form or exact
@@ -315,6 +348,7 @@ class LTISolver(ConvexProjectionSolver):
     def _kkt(self, hint: np.ndarray, active: np.ndarray, cycle: int, at: str) -> tuple | None:
         """KKT test at hint, which a profiled solve records with its cost, at cycle and where
         the solver tried it, one of "episode entry", "deflated limit" and "final active set"."""
+        self._kkt_attempts += 1
         profile = self._profile
         if profile is None:
             return kkt_certificate(self.z, self.unit_A, self.unit_b, hint, active, self._kkt_memo)
@@ -470,7 +504,8 @@ class LTISolver(ConvexProjectionSolver):
             profile.count("deflation", deflated_closed_form_flops(self.n, profile.touched, profile.rank))
         if cf is None:
             return self._step_episode(start_cycle)
-        certified = self._kkt(cf.x_inf, active, start_cycle, "deflated limit")
+        certified = None if self.schedule == "never" else self._kkt(cf.x_inf, active, start_cycle,
+                                                                    "deflated limit")
         if certified is not None:
             return self._settle_certified(*certified, start_cycle)
 
@@ -566,7 +601,8 @@ class LTISolver(ConvexProjectionSolver):
                 self._profile.settled_by = "finality"
             self._record_limit(cycle)
             return _SETTLED
-        certified = self._kkt(cf.x_inf, cf.active, cycle, "final active set")
+        certified = None if self.schedule == "never" else self._kkt(cf.x_inf, cf.active, cycle,
+                                                                    "final active set")
         if certified is not None:
             return self._settle_certified(*certified, cycle)
 
@@ -660,6 +696,9 @@ class LTISolver(ConvexProjectionSolver):
         """Pack the ProjectionResult, and leave the profile of a profiled solve in self.profile."""
         if self._profile is not None:
             self.profile = self._profile.as_dict()
+        schedule = self._schedule
+        self.kkt_record = {"kkt_attempts": self._kkt_attempts, "entry_tests": schedule.entry_tests,
+                           "failed_entry_work": schedule.failed_entry_work, "work": schedule.work}
         return ProjectionResult(
             projection=self.x,
             path=self.x_historical,

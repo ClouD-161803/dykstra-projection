@@ -38,9 +38,23 @@ enum {
                                    cycles                                     */
 };
 
+/* schedule codes: where the KKT test is tried, as lti_numerics.KKTSchedule
+ * describes and in the order of lti_numerics.SCHEDULES */
+enum {
+    ACCELERATED_SCHEDULE_WORK     = 0,  /* at the first phase entry, then once the
+                                           work since the last failed entry test
+                                           exceeds that test's work              */
+    ACCELERATED_SCHEDULE_EVERY    = 1,  /* at every phase entry                  */
+    ACCELERATED_SCHEDULE_DOUBLING = 2,  /* at phase entries 1, 2, 4, 8, ...      */
+    ACCELERATED_SCHEDULE_NEVER    = 3   /* nowhere, not at a singular limit nor
+                                           at a final active set either, so the
+                                           solver never settles                  */
+};
+
 /* error return values (negative) */
 enum {
-    ACCELERATED_ERR_ARGS        = -1,  /* bad dimensions / NULL pointer      */
+    ACCELERATED_ERR_ARGS        = -1,  /* bad dimensions, a NULL pointer, or
+                                          an unknown schedule                */
     ACCELERATED_ERR_ZERO_NORMAL = -2,  /* a constraint row has zero norm     */
     ACCELERATED_ERR_ALLOC       = -3   /* out of memory                      */
 };
@@ -56,6 +70,18 @@ typedef struct {
     int       skips;           /* jumps taken: envelope jumps, frozen-stall
                                   fast-forwards and the jump to the budget    */
     long long cycles_skipped;  /* cycles those jumps covered                  */
+    int       kkt_attempts;    /* KKT tests run, at phase entries, at the
+                                  limits of singular phases and at final
+                                  active sets                                 */
+    int       entry_tests;     /* those tried at phase entries                */
+    long long failed_entry_work; /* work of the entry tests that failed, in
+                                  the flops of lti_numerics.kkt_test_work     */
+    long long work;            /* all other work, in the same unit            */
+    int       settled_at;      /* on ACCELERATED_SETTLED, the cycle from which
+                                  x_out is the projection, as LTISolver's
+                                  settled_at: the entry of the phase whose test
+                                  passed, or the cycle a final active set was
+                                  proven on                                   */
 } accelerated_info;
 
 /*
@@ -69,6 +95,7 @@ typedef struct {
  *   z           point to project (dim entries)
  *   max_cycles  cycle budget (1 <= max_cycles < INT_MAX), counted in Dykstra
  *               cycles, skipped ones included
+ *   schedule    one of the ACCELERATED_SCHEDULE_ codes
  *   x_out       result (dim entries)
  *   duals_out   optional (may be NULL): n_planes multipliers lambda >= 0 with
  *               respect to the caller's rows, z - x_out = A^T lambda.  On
@@ -83,6 +110,7 @@ typedef struct {
 ACCELERATED_API int accelerated_dykstra_solve(int n_planes, int dim,
                                               const double *A, const double *b,
                                               const double *z, int max_cycles,
+                                              int schedule,
                                               double *x_out, double *duals_out,
                                               accelerated_info *info);
 

@@ -6,7 +6,9 @@
  * Dykstra's iteration is linear, so an episode of constant activity is
  * evaluated in closed form, jumped where an envelope certifies it switch-free,
  * fast-forwarded when frozen, and settled only on a point that passes the KKT
- * test.  Where it departs from the Python the comment at that place says why;
+ * test, which a schedule tries at the phase entries it chooses, counting work as
+ * lti_numerics.KKTSchedule does.  Where it departs from the Python the comment
+ * at that place says why;
  * the departures are a reduced-coordinate scan in place of the
  * eigen-decomposition, an estimated condition number, an incrementally
  * factored Lawson-Hanson, and coordinates no constraint touches dropped before
@@ -52,6 +54,62 @@
 static double rounding_floor(double magnitude)
 {
     return ROUNDING_UNITS * DBL_EPSILON * magnitude;
+}
+
+/* The work the schedule counts, in flops from sizes the Python and the C share,
+ * as the functions of the same names in lti_numerics.py, which give the reasons.
+ * Sums saturate at LLONG_MAX, as WORK_CAP does there. */
+static long long lstsq_work(long long rows, long long cols)
+{
+    const long long shorter = rows < cols ? rows : cols, longer = rows < cols ? cols : rows;
+    return 4 * longer * shorter * shorter;
+}
+
+static long long cycle_work(long long n, long long p, long long m)
+{
+    return 4 * n * p + 2 * m * p;
+}
+
+static long long cycle_map_work(long long n, long long p, long long m)
+{
+    return 4 * n * p * p + 4 * m * p * p;
+}
+
+static long long phase_setup_work(long long n, long long p)
+{
+    return 2 * p * p * p / 3 + 2 * n * p * p + 14 * n * p;
+}
+
+static long long support_work(long long n, long long p, long long s)
+{
+    return 6 * n * p + 2 * lstsq_work(s, p);
+}
+
+static long long kkt_test_work(long long n, long long p, long long m, long long c)
+{
+    long long work = 4 * n * p;
+    if (c == 0) return work + support_work(n, p, 0);
+    work += 2 * c * c * p + lstsq_work(c, c) + 2 * lstsq_work(c, p)
+          + 2 * support_work(n, p, c < p ? c : p) + support_work(n, p, m)
+          + support_work(n, p, c);
+    if (c <= KKT_EXHAUSTIVE) {
+        long long ways = 1;
+        for (long long size = 1; size <= c; ++size) {
+            ways = ways * (c - size + 1) / size;
+            work += ways * support_work(n, p, size);
+        }
+    }
+    return work;
+}
+
+static long long saturated_sum(long long a, long long b)
+{
+    return (a > LLONG_MAX - b) ? LLONG_MAX : a + b;
+}
+
+static long long scaled_work(long long count, long long work)
+{
+    return (work > 0 && count > LLONG_MAX / work) ? LLONG_MAX : count * work;
 }
 
 static double dot(const double *a, const double *b, int p)
@@ -333,6 +391,12 @@ typedef struct {
 
     int *ipiv;
     unsigned char *active, *coupled;
+
+    /* The schedule of the KKT test: its code, the phase entries so far, the work
+     * since the last failed entry test and that test's work, -1 before the
+     * first, and the candidate rows of the last test. */
+    int schedule, entries, kkt_rows;
+    long long since, debt;
     accelerated_info info;
 } accelerated_ws;
 
@@ -900,6 +964,8 @@ static int kkt_certificate(accelerated_ws *w, const double *hint)
         const double scale = absdot(a, w->kmag, p) + fabs(w->bvec[m]);
         if (w->active[m] || slack >= -KKT_CANDIDATE_TOL * scale) rows[nr++] = m;
     }
+    w->kkt_rows = nr;
+    w->info.kkt_attempts += 1;
 
     if (nr > 0) {
         for (int i = 0; i < nr; ++i) {
@@ -1521,8 +1587,9 @@ static int stall_episode(accelerated_ws *w, int cycle, int *switch_cycle)
  * follow, so the budget's iterate is one closed-form jump away. */
 static int settle_final(accelerated_ws *w, int cyc, int t, const double *u)
 {
-    if (kkt_certificate(w, w->xinf)) {
+    if (w->schedule != ACCELERATED_SCHEDULE_NEVER && kkt_certificate(w, w->xinf)) {
         settle_certified(w);
+        w->info.settled_at = cyc;
         return EP_SETTLED;
     }
     const int k = w->max_iter - cyc;
@@ -1622,19 +1689,59 @@ static int step_episode(accelerated_ws *w, int cycle, int *switch_cycle)
     return EP_BUDGET;
 }
 
+static int active_count(const accelerated_ws *w)
+{
+    int m = 0;
+    for (int k = 0; k < w->n; ++k) m += w->active[k];
+    return m;
+}
+
+static void add_work(accelerated_ws *w, long long work)
+{
+    w->since = saturated_sum(w->since, work);
+    w->info.work = saturated_sum(w->info.work, work);
+}
+
+/* Counts a phase entry and says whether the schedule tries the test there. */
+static int entry_test(accelerated_ws *w)
+{
+    int attempt = 0;
+    w->entries += 1;
+    if (w->schedule == ACCELERATED_SCHEDULE_EVERY)
+        attempt = 1;
+    else if (w->schedule == ACCELERATED_SCHEDULE_DOUBLING)
+        attempt = (w->entries & (w->entries - 1)) == 0;
+    else if (w->schedule == ACCELERATED_SCHEDULE_WORK)
+        attempt = w->debt < 0 || w->since > w->debt;
+    w->info.entry_tests += attempt;
+    return attempt;
+}
+
 /* Episodes separated by exact switching cycles.  A point that passes the KKT
  * test is the projection whatever the episode would do next, and finding it
- * needs no resolvent, so it is tried first at every entry. */
+ * needs no resolvent, so it is tried first at every entry the schedule
+ * chooses. */
 static int accelerate(accelerated_ws *w)
 {
     const int n = w->n, p = w->p;
     int cycle = 2;
+    w->debt = -1;
+    add_work(w, cycle_work(n, p, active_count(w)));
+    add_work(w, cycle_map_work(n, p, active_count(w)));
     while (cycle <= w->max_iter) {
+        const int active_rows = active_count(w);
 
-        if (kkt_certificate(w, w->x)) {
-            settle_certified(w);
-            return ACCELERATED_SETTLED;
+        if (entry_test(w)) {
+            if (kkt_certificate(w, w->x)) {
+                settle_certified(w);
+                w->info.settled_at = cycle;
+                return ACCELERATED_SETTLED;
+            }
+            w->debt = kkt_test_work(n, p, active_rows, w->kkt_rows);
+            w->since = 0;
+            w->info.failed_entry_work = saturated_sum(w->info.failed_entry_work, w->debt);
         }
+        add_work(w, phase_setup_work(n, p));
 
         for (int i = 0; i < p; ++i)
             for (int j = 0; j < p; ++j)
@@ -1650,8 +1757,9 @@ static int accelerate(accelerated_ws *w)
             for (int m = 0; m < n && !any; ++m) any = w->active[m];
             if (!any || !setup_deflated(w)) {
                 ep = step_episode(w, cycle, &switch_cycle);
-            } else if (kkt_certificate(w, w->xinf)) {
+            } else if (w->schedule != ACCELERATED_SCHEDULE_NEVER && kkt_certificate(w, w->xinf)) {
                 settle_certified(w);
+                w->info.settled_at = cycle;
                 return ACCELERATED_SETTLED;
             } else {
                 ep = scan_episode(w, cycle, &switch_cycle);
@@ -1661,10 +1769,13 @@ static int accelerate(accelerated_ws *w)
         if (ep == EP_SETTLED) return ACCELERATED_SETTLED;
         if (ep == EP_BUDGET) return ACCELERATED_MAXCYCLES;
 
+        add_work(w, scaled_work(switch_cycle - cycle, cycle_work(n, p, active_rows)));
         dykstra_cycle(w);
         w->info.cycles = switch_cycle;
         w->info.switches += 1;
+        add_work(w, cycle_work(n, p, active_count(w)));
         build_cycle_map(w);
+        add_work(w, cycle_map_work(n, p, active_count(w)));
         cycle = switch_cycle + 1;
     }
     return ACCELERATED_MAXCYCLES;
@@ -1710,7 +1821,7 @@ static size_t layout(accelerated_ws *w, double *base, size_t n, size_t p)
 
 static int solve_impl(int n_planes, int dim,
                       const double *A, const double *b, const double *z,
-                      int max_cycles, double *x_out, double *duals_out,
+                      int max_cycles, int schedule, double *x_out, double *duals_out,
                       accelerated_info *info);
 
 /* Solves on the columns of A that some row touches, touched of the dim, and
@@ -1718,7 +1829,7 @@ static int solve_impl(int n_planes, int dim,
  * it. */
 static int solve_touched(int n_planes, int dim, int touched,
                          const double *A, const double *b, const double *z,
-                         int max_cycles, double *x_out, double *duals_out,
+                         int max_cycles, int schedule, double *x_out, double *duals_out,
                          accelerated_info *info)
 {
     const size_t n = (size_t)n_planes, t = (size_t)touched;
@@ -1737,7 +1848,8 @@ static int solve_touched(int n_planes, int dim, int touched,
         for (size_t m = 0; m < n; ++m)
             for (size_t j = 0; j < t; ++j) At[m * t + j] = A[m * (size_t)dim + (size_t)cols[j]];
         for (size_t j = 0; j < t; ++j) zt[j] = z[cols[j]];
-        status = solve_impl(n_planes, touched, At, b, zt, max_cycles, xt, duals_out, info);
+        status = solve_impl(n_planes, touched, At, b, zt, max_cycles, schedule, xt, duals_out,
+                            info);
         if (status >= 0) {
             memcpy(x_out, z, (size_t)dim * sizeof(double));
             for (size_t j = 0; j < t; ++j) x_out[cols[j]] = xt[j];
@@ -1749,22 +1861,27 @@ static int solve_touched(int n_planes, int dim, int touched,
 
 static int solve_impl(int n_planes, int dim,
                       const double *A, const double *b, const double *z,
-                      int max_cycles, double *x_out, double *duals_out,
+                      int max_cycles, int schedule, double *x_out, double *duals_out,
                       accelerated_info *info)
 {
     /* A budget of INT_MAX is refused: the cycle counters step one past the
      * budget before they stop. */
     if (n_planes < 0 || dim < 1 || max_cycles < 1 || max_cycles == INT_MAX
+        || schedule < ACCELERATED_SCHEDULE_WORK || schedule > ACCELERATED_SCHEDULE_NEVER
         || !z || !x_out || (n_planes > 0 && (!A || !b)))
         return ACCELERATED_ERR_ARGS;
 
+    /* Without constraints z is its own projection, which only a KKT test proves */
     if (n_planes == 0) {
+        const int status = (schedule == ACCELERATED_SCHEDULE_NEVER) ? ACCELERATED_MAXCYCLES
+                                                                   : ACCELERATED_SETTLED;
         memcpy(x_out, z, (size_t)dim * sizeof(double));
         if (info) {
             memset(info, 0, sizeof(*info));
-            info->status = ACCELERATED_SETTLED;
+            info->status = status;
+            if (status == ACCELERATED_MAXCYCLES) info->cycles = max_cycles;
         }
-        return ACCELERATED_SETTLED;
+        return status;
     }
 
     /* A coordinate no constraint touches would make I - A_m singular and send every
@@ -1780,7 +1897,7 @@ static int solve_impl(int n_planes, int dim,
             touched += hit;
         }
         if (touched > 0 && touched < dim)
-            return solve_touched(n_planes, dim, touched, A, b, z, max_cycles,
+            return solve_touched(n_planes, dim, touched, A, b, z, max_cycles, schedule,
                                  x_out, duals_out, info);
     }
 
@@ -1809,7 +1926,7 @@ static int solve_impl(int n_planes, int dim,
     }
 
     layout(&w, arena, n, p);
-    w.n = n_planes; w.p = dim; w.max_iter = max_cycles;
+    w.n = n_planes; w.p = dim; w.max_iter = max_cycles; w.schedule = schedule;
     int *ia = iarena;
     w.ipiv   = ia; ia += mx;
     w.lsperm = ia; ia += mx;
@@ -1862,9 +1979,10 @@ done:
 ACCELERATED_API int accelerated_dykstra_solve(int n_planes, int dim,
                                               const double *A, const double *b,
                                               const double *z, int max_cycles,
+                                              int schedule,
                                               double *x_out, double *duals_out,
                                               accelerated_info *info)
 {
-    return solve_impl(n_planes, dim, A, b, z, max_cycles,
+    return solve_impl(n_planes, dim, A, b, z, max_cycles, schedule,
                       x_out, duals_out, info);
 }
