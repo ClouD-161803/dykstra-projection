@@ -4,17 +4,12 @@ import contextlib
 import io
 from pathlib import Path
 import re
-import sys
 import unittest
 import warnings
 
 import numpy as np
 
-
-WORKING_VERSION = Path(__file__).resolve().parents[1] / "Python" / "Working Version"
-sys.path.insert(0, str(WORKING_VERSION))
-
-from convex_projection_solver import (
+from dykstra.convex_projection_solver import (
     DykstraMapHybridSolver,
     DykstraProjectionSolver,
     DykstraStallDetectionSolver,
@@ -325,7 +320,7 @@ class SolverRegressionTests(unittest.TestCase):
         """rounded_box_constraints centred every corner's arc on the centre of the box,
         where the arcs meet only for a square. A 4 by 2 box came back as the polygon around
         the disk of radius 1, which excludes the box's own point (1.8, 0)."""
-        from edge_rounder import rounded_box_constraints
+        from dykstra.edge_rounder import rounded_box_constraints
 
         center = np.array([1.0, -0.5])
         for width, height in ((2.0, 2.0), (4.0, 2.0), (2.0, 5.0)):

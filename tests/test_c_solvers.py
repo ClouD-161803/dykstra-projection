@@ -1,23 +1,17 @@
 """Contract tests for the C solvers; skipped until the libraries in C/ are built."""
 
-from pathlib import Path
-import sys
 import unittest
 
 import numpy as np
 
-
-WORKING_VERSION = Path(__file__).resolve().parents[1] / "Python" / "Working Version"
-sys.path.insert(0, str(WORKING_VERSION))
-
-from c_solvers import (
+from dykstra.c_solvers import (
     MAX_CYCLES,
     accelerated_c_projection,
     dykstra_c_projection,
     libraries_built,
 )
-from convex_projection_solver import DykstraProjectionSolver
-from paper_figures import bounded_problem, infeasible_start
+from dykstra.convex_projection_solver import DykstraProjectionSolver
+from dykstra.paper_figures import bounded_problem, infeasible_start
 
 
 def box_line_problem() -> tuple[np.ndarray, np.ndarray, np.ndarray]:

@@ -2,7 +2,6 @@
 
 from pathlib import Path
 import signal
-import sys
 import threading
 import unittest
 from unittest import mock
@@ -10,16 +9,13 @@ import warnings
 
 import numpy as np
 
-
-WORKING_VERSION = Path(__file__).resolve().parents[1] / "Python" / "Working Version"
-sys.path.insert(0, str(WORKING_VERSION))
-
-from convex_projection_solver import DykstraProjectionSolver
-import lti_numerics
-from lti_numerics import nonnegative_least_squares, nonnegative_quadratic
-import lti_solver
-from lti_solver import LTIVer1Solver, LTIVer2Solver, LTIVer3Solver, LTIVer4Solver, LTIVer5Solver
-from oracle import oracle_lti_projection, record_schedule
+from dykstra.convex_projection_solver import DykstraProjectionSolver
+from dykstra import lti_numerics
+from dykstra.lti_numerics import nonnegative_least_squares, nonnegative_quadratic
+from dykstra import lti_solver
+from dykstra.lti_solver import (LTIVer1Solver, LTIVer2Solver, LTIVer3Solver, LTIVer4Solver,
+                                LTIVer5Solver)
+from dykstra.oracle import oracle_lti_projection, record_schedule
 
 
 LTI_SOLVERS = (
@@ -536,7 +532,7 @@ class LTISolverRegressionTests(unittest.TestCase):
         import contextlib
         import io
         import tempfile
-        from visualiser import ResultExporter
+        from dykstra.visualiser import ResultExporter
 
         z, A, b = np.array([2.0, 1.0]), np.array([[1.0, 0.0], [1.0, 1.0]]), np.zeros(2)
         for solver_type in (DykstraProjectionSolver, LTIVer5Solver):

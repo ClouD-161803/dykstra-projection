@@ -2,10 +2,11 @@
 random problems per size (n, p) with a stalling period and with an approximate stall, which
 fig:sm-stall-frozen and fig:sm-stall-plateau show.
 
-Run from this folder with `python stall_grid.py`, or with `--quick` for a small grid written to a
-temporary directory. Every problem is a Generator 2 polyhedron from problem_generators with its
-infeasible start, run by plain Dykstra for GRID_HORIZON cycles. The figures and CSV files go to
-results/paper beside this script, and the numbers the supplement quotes are printed at the end.
+Run from the repository root with `python -m dykstra.stall_grid`, or with `--quick` for a small
+grid written to a temporary directory. Every problem is a Generator 2 polyhedron from
+problem_generators with its infeasible start, run by plain Dykstra for GRID_HORIZON cycles. The
+figures and CSV files go to results/paper at the repository root, and the numbers the supplement
+quotes are printed at the end.
 
 run_batch, the plain Dykstra run with both detectors applied cycle by cycle, is shared with
 stall_angles.py. Every choice the supplement does not state is a module constant below.
@@ -49,11 +50,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 
-import paper_figures
-from paper_figures import GRID, INK, RED, quiet_accelerate_warnings, save_figure
-from convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
-from lti_numerics import cycle_map, is_frozen, rounding_floor, unit_constraints
-from problem_generators import problem
+from dykstra import paper_figures
+from dykstra.paper_figures import GRID, INK, RED, quiet_accelerate_warnings, save_figure
+from dykstra.convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
+from dykstra.lti_numerics import cycle_map, is_frozen, rounding_floor, unit_constraints
+from dykstra.problem_generators import problem
 
 
 # The grid of the supplement, read off the old heat maps: nine values of n, seven of p, the

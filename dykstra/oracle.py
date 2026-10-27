@@ -3,10 +3,11 @@ replays it with every activity change known in advance, entering each episode wi
 one exact cycle and jumping the rest of the episode in closed form."""
 
 import numpy as np
-from convex_projection_solver import ConvexProjectionSolver
-from lti_numerics import (RESOLVENT_COND_CAP, active_auxiliaries, advance, closed_form, cycle_map,
-                          exact_cycle, ignore_blas_flags, touched_resolvent, unit_constraints)
-from projection_result import ProjectionResult
+from dykstra.convex_projection_solver import ConvexProjectionSolver
+from dykstra.lti_numerics import (RESOLVENT_COND_CAP, active_auxiliaries, advance, closed_form,
+                                  cycle_map, exact_cycle, ignore_blas_flags, touched_resolvent,
+                                  unit_constraints)
+from dykstra.projection_result import ProjectionResult
 
 
 @ignore_blas_flags

@@ -3,23 +3,17 @@ solvers against the Python, on random bounded polyhedra in dimensions 2 to 64 an
 degenerate arrangements. Nothing here imports pyplot, so it runs without a display."""
 
 from functools import lru_cache
-from pathlib import Path
-import sys
 import time
 import unittest
 
 import numpy as np
 
-
-WORKING_VERSION = Path(__file__).resolve().parents[1] / "Python" / "Working Version"
-sys.path.insert(0, str(WORKING_VERSION))
-
-from c_solvers import accelerated_c_projection, dykstra_c_projection, libraries_built
-from convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
-from lti_examples import box_line_problem
-from lti_numerics import kkt_certificate, nonnegative_quadratic, unit_constraints
-from lti_solver import PRESETS, LTISolver
-from oracle import oracle_lti_projection, record_schedule
+from dykstra.c_solvers import accelerated_c_projection, dykstra_c_projection, libraries_built
+from dykstra.convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
+from dykstra.lti_examples import box_line_problem
+from dykstra.lti_numerics import kkt_certificate, nonnegative_quadratic, unit_constraints
+from dykstra.lti_solver import PRESETS, LTISolver
+from dykstra.oracle import oracle_lti_projection, record_schedule
 
 
 # Seeded random problems as (rows, dimension, seed), spanning dimensions 2 to 64 and 3 to

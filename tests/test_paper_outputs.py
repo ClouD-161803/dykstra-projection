@@ -4,33 +4,23 @@ from contextlib import contextmanager
 import importlib.util
 import math
 from pathlib import Path
-import sys
 import tempfile
 import unittest
 
 import numpy as np
 
-
-WORKING_VERSION = Path(__file__).resolve().parents[1] / "Python" / "Working Version"
-sys.path.insert(0, str(WORKING_VERSION))
-
-import paper_figures
-import performance_timing
-from paper_figures import (
+from dykstra import paper_figures, performance_timing
+from dykstra.paper_figures import (
     bounded_problem,
     corner,
     infeasible_start,
     phase_scalars,
     three_plane_arrangement,
 )
-from lti_numerics import rigorous_deactivation_horizon
-from lti_solver import LTIVer5Solver
-import benchmark
-import c_solvers
-import c_validation
-import problem_generators
-import square_line_example
-from convex_projection_solver import ConvexProjectionSolver
+from dykstra.lti_numerics import rigorous_deactivation_horizon
+from dykstra.lti_solver import LTIVer5Solver
+from dykstra import benchmark, c_solvers, c_validation, problem_generators, square_line_example
+from dykstra.convex_projection_solver import ConvexProjectionSolver
 
 
 ANALYTIC_FIGURES = (
@@ -406,10 +396,9 @@ class BenchmarkRunTests(unittest.TestCase):
                 self.assertLess(record["projection error"], 1e-9)
 
 
-import activity_figures
-import activity_study
-from activity_study import Run, change_counts, change_cycles, exact_entries, record_runs
-from lti_numerics import cycle_map
+from dykstra import activity_figures, activity_study
+from dykstra.activity_study import Run, change_counts, change_cycles, exact_entries, record_runs
+from dykstra.lti_numerics import cycle_map
 
 
 ACTIVITY_FIGURES = ("half_space_activity_single", "half_space_activity_study",
@@ -439,7 +428,7 @@ class ActivityRecorderTests(unittest.TestCase):
         self.assert_records_match_exact_cycle(1, 10, 3, 1500)
 
     def test_exact_cycle_walks_the_core_solver_path(self) -> None:
-        from convex_projection_solver import DykstraProjectionSolver
+        from dykstra.convex_projection_solver import DykstraProjectionSolver
 
         A, b, z = activity_study.draw_problem(2, 12, 3, activity_study.study_seed(12, 3, 0))
         _, _, points = exact_entries(A, b, z, 60)
@@ -548,9 +537,8 @@ class ActivityStudyOutputTests(unittest.TestCase):
 from contextlib import redirect_stdout
 import io
 
-import stall_angles
-import stall_grid
-from convex_projection_solver import DykstraProjectionSolver
+from dykstra import stall_angles, stall_grid
+from dykstra.convex_projection_solver import DykstraProjectionSolver
 
 
 STALL_FIGURES = ("stall_grid_frozen", "stall_grid_plateau", "stall_angle_cycles",

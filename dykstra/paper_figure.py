@@ -1,7 +1,19 @@
+"""The comparison figure of the earlier report, plain Dykstra against the stall detection solver
+on a box with a line through it. Run from the repository root with
+`python -m dykstra.paper_figure`. It writes both results as CSV files to results/ at the
+repository root and opens the figure in a window.
+"""
+
+import os
+
 import numpy as np
-from convex_projection_solver import (DykstraProjectionSolver as Dykstra,
-                                       DykstraStallDetectionSolver as FastForward)
-from visualiser import ResultExporter, ComparisonVisualiser
+from dykstra import REPOSITORY_ROOT
+from dykstra.convex_projection_solver import (DykstraProjectionSolver as Dykstra,
+                                              DykstraStallDetectionSolver as FastForward)
+from dykstra.visualiser import ResultExporter, ComparisonVisualiser
+
+
+OUTPUT_DIR = os.path.join(REPOSITORY_ROOT, "results")
 
 
 def run() -> None:
@@ -49,11 +61,9 @@ def run() -> None:
     solver1_name = "Dykstra"
     solver2_name = "Algorithm (1)"
     
-    output_dir = "./results"
-    
     ResultExporter.export(
         result=result1,
-        output_path=output_dir,
+        output_path=OUTPUT_DIR,
         solver_name=solver1_name,
         initial_point=z,
         A=A,
@@ -66,7 +76,7 @@ def run() -> None:
     
     ResultExporter.export(
         result=result2,
-        output_path=output_dir,
+        output_path=OUTPUT_DIR,
         solver_name=solver2_name,
         initial_point=z,
         A=A,

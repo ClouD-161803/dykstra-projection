@@ -3,9 +3,9 @@ the dense columns of the SIAM paper's tab:benchmark and the supplement's tab:sm-
 and tab:sm-bench-profiles.
 
 Install the solvers with `uv sync --group benchmark` and build the C solvers with
-`make -C C`, both from the repository root, then run from this folder with
-`python benchmark.py`, or with `--tiers 2 --seeds 1` for a short run, or with `--quick` for
-one problem written to a temporary directory.
+`make -C C`, then run with `python -m dykstra.benchmark`, all from the repository root, or with
+`--tiers 2 --seeds 1` for a short run, or with `--quick` for one problem written to a temporary
+directory.
 
 The test set is problems 0 to seeds - 1 of each tier in TIERS, n = 4p - 4 half-spaces in
 dimension p, drawn by problem_generators.problem and posed as the QP of minimising
@@ -25,8 +25,8 @@ Every solver is called once, untimed, under every profile before the timed runs 
 because the first call pays a one-time initialisation. Every time is the median of runs
 repeated until they total REPEAT_SECONDS or number REPEATS, and excludes the conversion of a problem to sparse form for solvers that take only sparse
 input, as qpbenchmark does. The primal residual, dual residual and duality gap of each
-returned point follow qpbenchmark's definitions. Results go to results/paper beside this
-script.
+returned point follow qpbenchmark's definitions. Results go to results/paper at the
+repository root.
 """
 
 import argparse
@@ -41,13 +41,12 @@ import time
 
 import numpy as np
 
-import c_solvers
-import paper_figures
-from convex_projection_solver import ConvexProjectionSolver
-from oracle import oracle_lti_projection, record_schedule
-from paper_figures import quiet_accelerate_warnings, save_tex
-from performance_timing import machine_description
-from problem_generators import problem, problem_seed
+from dykstra import c_solvers, paper_figures
+from dykstra.convex_projection_solver import ConvexProjectionSolver
+from dykstra.oracle import oracle_lti_projection, record_schedule
+from dykstra.paper_figures import quiet_accelerate_warnings, save_tex
+from dykstra.performance_timing import machine_description
+from dykstra.problem_generators import problem, problem_seed
 
 
 TIERS = tuple((4 * p - 4, p) for p in (4, 6, 8, 10, 14, 18, 26, 38, 64))
@@ -354,7 +353,7 @@ def describe() -> list[str]:
 
 
 def run(tiers: tuple = TIERS, seeds: int = SEEDS, oracle: bool = True,
-        command: str = "python benchmark.py") -> list[dict]:
+        command: str = "python -m dykstra.benchmark") -> list[dict]:
     """Benchmark, print the method, and write the CSV and the three tables."""
     header = describe()
     for line in header:
@@ -402,7 +401,7 @@ def main() -> None:
         paper_figures.OUTPUT_DIR = tempfile.mkdtemp(prefix="benchmark_")
         tiers, seeds = TIERS[:1], 1
     run(tiers, seeds, not args.no_oracle,
-        " ".join(["python benchmark.py", *sys.argv[1:]]))
+        " ".join(["python -m dykstra.benchmark", *sys.argv[1:]]))
     print(f"Finished in {time.perf_counter() - began:.0f} s: benchmark.csv, "
           f"tab-benchmark-dense.tex, tab-sm-bench-tiers.tex and tab-sm-bench-profiles.tex in "
           f"{paper_figures.OUTPUT_DIR}")

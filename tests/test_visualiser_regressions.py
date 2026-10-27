@@ -4,7 +4,6 @@ import contextlib
 import csv
 import io
 from pathlib import Path
-import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -16,12 +15,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-
-WORKING_VERSION = Path(__file__).resolve().parents[1] / "Python" / "Working Version"
-sys.path.insert(0, str(WORKING_VERSION))
-
-from projection_result import ProjectionResult
-from visualiser import ResultExporter, Visualiser
+from dykstra.projection_result import ProjectionResult
+from dykstra.visualiser import ResultExporter, Visualiser
 
 
 class VisualiserRegressionTests(unittest.TestCase):
@@ -44,7 +39,7 @@ class VisualiserRegressionTests(unittest.TestCase):
         ]
         visualiser = Visualiser(result, ab_pairs, 2, [-1.0, 1.0], [-1.0, 1.0])
 
-        with patch("visualiser.plt.show"):
+        with patch("dykstra.visualiser.plt.show"):
             visualiser.visualise()
 
         self.assertEqual(len(visualiser.fig.axes), 8)

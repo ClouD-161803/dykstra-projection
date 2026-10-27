@@ -2,10 +2,10 @@
 Additional stall studies: fig:sm-angle-cycles, fig:sm-angle-stallcycles, fig:sm-angle-capture and
 fig:sm-acc-stall.
 
-Run from this folder with `python stall_angles.py`, or with `--quick` for small sizes written to a
-temporary directory, or with `--only accelerated` to redo the accelerated study alone. The
-figures and CSV files go to results/paper beside this script, and the numbers the supplement
-quotes are printed at the end. Plain Dykstra runs through stall_grid.run_batch, with the stall
+Run from the repository root with `python -m dykstra.stall_angles`, or with `--quick` for small
+sizes written to a temporary directory, or with `--only accelerated` to redo the accelerated
+study alone. The figures and CSV files go to results/paper at the repository root, and the
+numbers the supplement quotes are printed at the end. Plain Dykstra runs through stall_grid.run_batch, with the stall
 detectors and the converged threshold of stall_grid.py.
 
 The supplement does not define either family, and this module defines both. Each is built with
@@ -50,13 +50,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
-import c_solvers
-import paper_figures
-import performance_timing
-from paper_figures import BLUE, GREY, INK, RED, quiet_accelerate_warnings, save_figure, style_axes
-from convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
-from lti_solver import LTIVer5Solver
-from stall_grid import CONVERGED_SQUARED_ERROR, run_batch, summarise_runs, write_records
+from dykstra import c_solvers, paper_figures, performance_timing
+from dykstra.paper_figures import (BLUE, GREY, INK, RED, quiet_accelerate_warnings, save_figure,
+                                   style_axes)
+from dykstra.convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
+from dykstra.lti_solver import LTIVer5Solver
+from dykstra.stall_grid import CONVERGED_SQUARED_ERROR, run_batch, summarise_runs, write_records
 
 
 # The angle grid, read off the old figures, and the sweep of the supplement: p in {3, 8}, 40

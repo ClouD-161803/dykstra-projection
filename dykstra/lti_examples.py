@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from convex_projection_solver import ConvexProjectionSolver
+from dykstra.convex_projection_solver import ConvexProjectionSolver
 
 
 HalfSpaceGroup = tuple[str, str, np.ndarray, np.ndarray]
@@ -62,7 +62,7 @@ def run_lti_example(solver_type: type[ConvexProjectionSolver], *, max_iter: int 
     print()
 
     # Imported here so that the problem itself can be imported without a plotting backend
-    from visualiser import VerticalVisualiser
+    from dykstra.visualiser import VerticalVisualiser
     visualiser = VerticalVisualiser(
         result,
         ab_pairs,

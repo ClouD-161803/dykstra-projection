@@ -1,9 +1,9 @@
 """Measure how closely the C solvers reproduce the Python solvers, the numbers behind the
 C-implementation paragraph of the SIAM paper's supplement.
 
-Run from this folder with `python c_validation.py` after building the libraries in the
-repository's C folder, or with `--quick` for two small tiers written to a temporary
-directory. On problems 0 to SEEDS - 1 of each size tier in TIERS, drawn by
+Run from the repository root with `python -m dykstra.c_validation` after building the
+libraries in the repository's C folder, or with `--quick` for two small tiers written to a
+temporary directory. On problems 0 to SEEDS - 1 of each size tier in TIERS, drawn by
 problem_generators.problem, it prints and writes to results/paper/tab-c-validation.tex:
 
 - the largest infinity-norm distance between the C and Python Dykstra iterates at each
@@ -22,12 +22,11 @@ import time
 
 import numpy as np
 
-import c_solvers
-import paper_figures
-from convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
-from lti_solver import LTIVer5Solver
-from paper_figures import quiet_accelerate_warnings, save_tex
-from problem_generators import problem, problem_seed
+from dykstra import c_solvers, paper_figures
+from dykstra.convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
+from dykstra.lti_solver import LTIVer5Solver
+from dykstra.paper_figures import quiet_accelerate_warnings, save_tex
+from dykstra.problem_generators import problem, problem_seed
 
 
 TIERS = ((12, 4), (20, 6), (28, 8), (36, 10))
@@ -166,7 +165,8 @@ def run() -> dict:
     ]
     body = "\n".join(f"  {name} & {value} \\\\" for name, value in rows)
     save_tex("% " + "\n% ".join(lines) + "\n\\begin{tabular}{l l}\n  \\hline\n" + body
-             + "\n  \\hline\n\\end{tabular}\n", "tab-c-validation", "python c_validation.py")
+             + "\n  \\hline\n\\end{tabular}\n", "tab-c-validation",
+             "python -m dykstra.c_validation")
     return {"worst": worst, "mismatched": mismatched, "certified": certified,
             "certified_worst": certified_worst, "edge_worst": edge_worst,
             "cycle_disagreements": cycle_disagreements}

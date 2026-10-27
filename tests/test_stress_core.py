@@ -14,7 +14,6 @@ import io
 from pathlib import Path
 import platform
 import re
-import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -26,18 +25,14 @@ matplotlib.use("Agg")
 
 import numpy as np
 
-
-WORKING_VERSION = Path(__file__).resolve().parents[1] / "Python" / "Working Version"
-sys.path.insert(0, str(WORKING_VERSION))
-
-from convex_projection_solver import (
+from dykstra.convex_projection_solver import (
     ConvexProjectionSolver,
     DykstraMapHybridSolver,
     DykstraProjectionSolver,
     DykstraStallDetectionSolver,
     dykstra_projection,
 )
-from visualiser import ResultExporter
+from dykstra.visualiser import ResultExporter
 
 
 SOLVERS = (DykstraProjectionSolver, DykstraMapHybridSolver, DykstraStallDetectionSolver)

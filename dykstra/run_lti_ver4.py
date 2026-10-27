@@ -1,7 +1,7 @@
 """Run LTI Ver4 on the shared box-and-line example."""
 
-from lti_examples import run_lti_example
-from lti_solver import LTIVer4Solver
+from dykstra.lti_examples import run_lti_example
+from dykstra.lti_solver import LTIVer4Solver
 
 
 def run() -> None:

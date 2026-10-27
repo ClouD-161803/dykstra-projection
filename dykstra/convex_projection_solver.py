@@ -27,8 +27,8 @@ import sys
 import warnings
 import numpy as np
 from abc import ABC, abstractmethod
-from projection_result import ProjectionResult
-from gradient import quadprog_solve_qp
+from dykstra.projection_result import ProjectionResult
+from dykstra.gradient import quadprog_solve_qp
 
 
 class ConvexProjectionSolver(ABC):

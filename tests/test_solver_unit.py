@@ -1,16 +1,10 @@
 """Unit tests for half-space projection and solver input handling."""
 
-from pathlib import Path
-import sys
 import unittest
 
 import numpy as np
 
-
-WORKING_VERSION = Path(__file__).resolve().parents[1] / "Python" / "Working Version"
-sys.path.insert(0, str(WORKING_VERSION))
-
-from convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
+from dykstra.convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
 
 
 class HalfSpaceProjectionTests(unittest.TestCase):

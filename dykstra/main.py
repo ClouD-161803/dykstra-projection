@@ -3,10 +3,9 @@ Main script for running Dykstra's projection algorithm.
 """
 
 import numpy as np
-from convex_projection_solver import (DykstraProjectionSolver,
-                                       DykstraMapHybridSolver,
-                                       DykstraStallDetectionSolver)
-from visualiser import Visualiser, VerticalVisualiser
+from dykstra.convex_projection_solver import (DykstraProjectionSolver, DykstraMapHybridSolver,
+                                              DykstraStallDetectionSolver)
+from dykstra.visualiser import Visualiser, VerticalVisualiser
 
 
 def run() -> None:

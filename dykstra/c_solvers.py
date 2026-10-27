@@ -8,9 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 import numpy as np
-from convex_projection_solver import ConvexProjectionSolver
+from dykstra import REPOSITORY_ROOT
+from dykstra.convex_projection_solver import ConvexProjectionSolver
 
-C_FOLDER = Path(__file__).resolve().parents[2] / "C"
+C_FOLDER = REPOSITORY_ROOT / "C"
 
 # The C cycle counters are ints that step one past the budget before they stop
 MAX_CYCLES = 2**31 - 2

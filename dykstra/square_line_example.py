@@ -1,6 +1,6 @@
 """Reproduce the square-and-line stalling example of the SIAM paper's Stalling section.
 
-Run from this folder with `python square_line_example.py`, or with `--quick`
+Run from the repository root with `python -m dykstra.square_line_example`, or with `--quick`
 to write into a temporary directory, since the example takes well under a second. The square [-1, 1]^2 is four
 half-spaces, right, left, top and bottom, and the line through (0, 1) and (2, 0) is two
 opposite half-spaces, below and above it. The script prints, and writes to
@@ -20,12 +20,11 @@ from fractions import Fraction
 
 import numpy as np
 
-import lti_solver
-import paper_figures
-from convex_projection_solver import ConvexProjectionSolver
-from lti_numerics import exact_cycle, unit_constraints
-from lti_solver import LTIVer5Solver
-from paper_figures import quiet_accelerate_warnings, save_tex, tex_number
+from dykstra import lti_solver, paper_figures
+from dykstra.convex_projection_solver import ConvexProjectionSolver
+from dykstra.lti_numerics import exact_cycle, unit_constraints
+from dykstra.lti_solver import LTIVer5Solver
+from dykstra.paper_figures import quiet_accelerate_warnings, save_tex, tex_number
 
 
 START = np.array([-4.1, 1.4])
@@ -341,7 +340,7 @@ def run() -> dict:
           f"({results['certificate']}) on {vector(results['certified_point'])}, quadprog "
           f"{vector(results['projection'])}")
     print("without the KKT test: " + ", ".join(results["trace_without_kkt"]))
-    save_tex(table(results), "tab-square-line", "python square_line_example.py")
+    save_tex(table(results), "tab-square-line", "python -m dykstra.square_line_example")
     return results
 
 

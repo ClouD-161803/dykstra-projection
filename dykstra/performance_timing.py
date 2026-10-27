@@ -1,10 +1,10 @@
 """Time Dykstra's algorithm and the accelerated solver to a fixed accuracy, the protocol
 behind the SIAM paper's tab:dykvsacc and the right panel of fig:performance.
 
-Run from this folder with `python performance_timing.py`, or with `--tiers small` and
-`--seeds 2` for a short run, or with `--quick` for a shorter one written to a temporary
-directory, or with `--from-csv` to rebuild the outputs from the records of the last run
-without timing again. Every problem is a Generator 2 polyhedron from
+Run from the repository root with `python -m dykstra.performance_timing`, or with `--tiers
+small` and `--seeds 2` for a short run, or with `--quick` for a shorter one written to a
+temporary directory, or with `--from-csv` to rebuild the outputs from the records of the last
+run without timing again. Every problem is a Generator 2 polyhedron from
 problem_generators with its infeasible start, problems 0 to seeds - 1 of each size tier.
 
 For each problem the first cycle at which an iterate is within TOLERANCE in squared
@@ -18,7 +18,7 @@ settle within CAP is counted at CAP cycles and the time of a CAP-cycle run. The 
 timed as whole calls. The Python solvers are timed in solve() alone, because their
 constructor runs the quadprog reference solve. Each time is the median of repeated runs,
 repeated until they total REPEAT_SECONDS or number REPEATS. Probes, the reference solve and
-the error checks are not timed. Results go to results/paper beside this script.
+the error checks are not timed. Results go to results/paper at the repository root.
 """
 
 import argparse
@@ -38,11 +38,10 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 
-import c_solvers
-import paper_figures
-from convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
-from lti_solver import LTIVer5Solver
-from paper_figures import (
+from dykstra import c_solvers, paper_figures
+from dykstra.convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
+from dykstra.lti_solver import LTIVer5Solver
+from dykstra.paper_figures import (
     INK,
     RED,
     TEAL,
@@ -51,7 +50,7 @@ from paper_figures import (
     save_tex,
     style_axes,
 )
-from problem_generators import problem, problem_seed
+from dykstra.problem_generators import problem, problem_seed
 
 
 # Size tiers as (half-spaces, dimensions). TABLE_TIERS are the rows of tab:dykvsacc
@@ -396,7 +395,7 @@ def run(tiers: tuple = TABLE_TIERS, seeds: int = SEEDS,
     """Time every tier in every implementation, print and write the table and the scaling."""
     print_method()
     records = measure(tiers, seeds, implementations)
-    return report(records, implementations, command or "python performance_timing.py",
+    return report(records, implementations, command or "python -m dykstra.performance_timing",
                   full_figure=tiers == TABLE_TIERS)
 
 
@@ -415,7 +414,7 @@ def main() -> None:
     args = parser.parse_args()
     implementations = ("c", "python") if args.implementation == "both" else (args.implementation,)
     quiet_accelerate_warnings()
-    command = " ".join(["python performance_timing.py", *sys.argv[1:]])
+    command = " ".join(["python -m dykstra.performance_timing", *sys.argv[1:]])
     began = time.perf_counter()
     if args.quick:
         REPEATS = 1

@@ -1,6 +1,6 @@
-# Environment definition, replacing requirements.txt as the source of truth.
-# Set up: `uv sync` (creates .venv/ and uv.lock). Run things: `uv run python ...`, `uv run pytest`.
-# pyproject.toml and uv.lock are committed; .venv/ stays local (already gitignored).
+# The environment, defined here and pinned in uv.lock, both committed. `uv sync` creates .venv/,
+# which git ignores. Run from the repository root: the tests with
+# `uv run python -m unittest discover -s tests`, a script with `uv run python -m dykstra.<module>`.
 
 [project]
 name = "dykstra"
@@ -17,9 +17,9 @@ dependencies = [
 dev = [
     "pytest>=8",
 ]
-# The QP solvers that Python/Working Version/benchmark.py compares against, and scipy for the
-# linear programs of Generator 1 in problem_generators.py. Install with
-# `uv sync --group benchmark`, since `uv sync` alone leaves them out.
+# The QP solvers that dykstra/benchmark.py compares against, and scipy for the linear programs
+# of Generator 1 in dykstra/problem_generators.py. Install with `uv sync --group benchmark`,
+# since `uv sync` alone leaves them out.
 benchmark = [
     "qpsolvers>=4.13",
     "scipy",
@@ -35,5 +35,5 @@ benchmark = [
 ]
 
 [tool.uv]
-# research code, not an installable package: Python/ holds versioned script folders, not a module tree.
+# research code, not installed: python -m finds the dykstra folder from the repository root
 package = false

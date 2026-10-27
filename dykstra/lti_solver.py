@@ -19,14 +19,14 @@ then it returns the limit, from the cycle recorded in settled_at on."""
 
 from collections import namedtuple
 import numpy as np
-from convex_projection_solver import ConvexProjectionSolver
-from lti_numerics import (RESOLVENT_COND_CAP, RHO_CAP, ClosedForm, KKTMemo, active_auxiliaries,
-                          active_set_is_final, advance, auxiliary_floor, closed_form,
-                          closed_form_activity, cycle_map, deflated_closed_form, exact_cycle,
-                          ignore_blas_flags, is_frozen, jump_length, kkt_certificate,
-                          predicted_activity, rounding_floor, stall_crossing, touched_resolvent,
-                          unit_constraints)
-from projection_result import ProjectionResult
+from dykstra.convex_projection_solver import ConvexProjectionSolver
+from dykstra.lti_numerics import (RESOLVENT_COND_CAP, RHO_CAP, ClosedForm, KKTMemo,
+                                  active_auxiliaries, active_set_is_final, advance, auxiliary_floor,
+                                  closed_form, closed_form_activity, cycle_map,
+                                  deflated_closed_form, exact_cycle, ignore_blas_flags, is_frozen,
+                                  jump_length, kkt_certificate, predicted_activity, rounding_floor,
+                                  stall_crossing, touched_resolvent, unit_constraints)
+from dykstra.projection_result import ProjectionResult
 
 PRESETS = ("cycle_map", "closed_form", "envelope", "frozen_stall", "deflated_modal")
 

@@ -9,7 +9,7 @@ import matplotlib.gridspec as gridspec
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle
-from projection_result import ProjectionResult
+from dykstra.projection_result import ProjectionResult
 
 
 # New files are written with the A @ x <= b convention.  The legacy markers

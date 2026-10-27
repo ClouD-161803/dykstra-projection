@@ -1,7 +1,7 @@
 """The statistics and the drawings of the nine figures of the activity study in activity_study.py.
 
-Each *_figure function writes its figure to results/paper beside this script, as PNG and PDF,
-through paper_figures.save_figure, and keeps the basename the supplement includes. The other
+Each *_figure function writes its figure to results/paper at the repository root, as PNG and
+PDF, through paper_figures.save_figure, and keeps the basename the supplement includes. The other
 functions compute the numbers the supplement quotes from the recorded runs.
 """
 
@@ -11,12 +11,12 @@ import numpy as np
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
-import paper_figures
-from paper_figures import BLUE, GREEN, GREY, GRID, INK, RED, TEAL, save_figure, style_axes
-from activity_study import (SINGLE_INDEX, Run, battery_timing, change_counts, change_cycles,
-                            draw_problem, exact_entries, sampled, study_seed)
-from convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
-from lti_numerics import unit_constraints
+from dykstra import paper_figures
+from dykstra.paper_figures import BLUE, GREEN, GREY, GRID, INK, RED, TEAL, save_figure, style_axes
+from dykstra.activity_study import (SINGLE_INDEX, Run, battery_timing, change_counts, change_cycles,
+                                    draw_problem, exact_entries, sampled, study_seed)
+from dykstra.convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
+from dykstra.lti_numerics import unit_constraints
 
 plt = paper_figures.plt
 

@@ -1,10 +1,10 @@
 """The activity study of the SIAM paper's supplement, section sm-activity, and its nine figures.
 
-Run from this folder with `python activity_study.py` for the full study, about four minutes on
-ten worker processes of an Apple M5 Pro, or with `--quick` for a reduced run into a temporary
-directory. activity_figures.py draws the figures into results/paper beside this script as PNG and
-PDF, every number the supplement quotes from them is printed, and all of them are stored in
-results/paper/activity_numbers.json.
+Run from the repository root with `python -m dykstra.activity_study` for the full study, about
+four minutes on ten worker processes of an Apple M5 Pro, or with `--quick` for a reduced run
+into a temporary directory. activity_figures.py draws the figures into results/paper at the
+repository root as PNG and PDF, every number the supplement quotes from them is printed, and all
+of them are stored in results/paper/activity_numbers.json.
 
 Activity follows eq:activeset of the article: half-space i is active in cycle t when the point
 it is visited with, shifted by its auxiliary, violates it, which leaves y_i > 0 after the visit.
@@ -35,9 +35,9 @@ import warnings
 
 import numpy as np
 
-from convex_projection_solver import ConvexProjectionSolver
-from lti_numerics import cycle_map, exact_cycle, unit_constraints
-from problem_generators import RandomTestPlanes, infeasible_start, problem
+from dykstra.convex_projection_solver import ConvexProjectionSolver
+from dykstra.lti_numerics import cycle_map, exact_cycle, unit_constraints
+from dykstra.problem_generators import RandomTestPlanes, infeasible_start, problem
 
 
 # Every constant below that the supplement does not state was chosen here.
@@ -365,8 +365,8 @@ def run(quick: bool = False, workers: int | None = None) -> dict:
     The batteries run cheapest first, and the numbers file is rewritten after each, hence an
     interrupted run leaves the figures and numbers of the batteries it finished.
     """
-    import activity_figures as figures
-    import paper_figures
+    from dykstra import activity_figures as figures
+    from dykstra import paper_figures
 
     quiet_accelerate_warnings()
     cfg = settings(quick)
@@ -454,7 +454,7 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=None, help=f"processes, {WORKERS} by default")
     arguments = parser.parse_args()
     if arguments.quick:
-        import paper_figures
+        from dykstra import paper_figures
         paper_figures.OUTPUT_DIR = tempfile.mkdtemp(prefix="activity_study_")
     run(arguments.quick, arguments.workers)
 
