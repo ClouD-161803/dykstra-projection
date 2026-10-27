@@ -1,51 +1,55 @@
 # Dykstra Projection
 
-This repository contains a Python implementation of Dykstra's algorithm for
-projecting a point onto the intersection of finitely many half-spaces. It also
-includes experimental MAP/Dykstra, stalling-aware, and LTI-accelerated variants,
-2-D visualisations, result export utilities, and the accompanying LaTeX report.
+This repository holds a Python implementation of Dykstra's algorithm for projecting a point onto the intersection of finitely many half-spaces. It also holds the accelerated solver of the paper below, in Python and in C, two experimental variants, 2-D visualisations, CSV export, and the scripts that reproduce every figure and table of the paper and its supplement.
 
-## Requirements
+## The paper
 
-- Python 3.10 through 3.13
-- The packages pinned in [`requirements.txt`](requirements.txt)
-- A graphical Matplotlib backend to display the example plots
+The paper is "Analysis of Dykstra's Algorithm for Polyhedra using Dynamical Systems Reformulation" by Riki Demma, Claudio Vestini, and Idris Kempf, typeset for a SIAM journal and accompanied by a supplement. Its LaTeX sources are kept outside this repository.
 
-The pinned NumPy release supports Python 3.10–3.13; use a matching interpreter
-when creating the environment.
+In the paper, Dykstra's iteration on a polyhedron is reformulated as a linear time-invariant (LTI) system between changes of the active set. The reformulation is used to analyse stalling and to derive an accelerated solver, which compacts each run of cycles with a constant active set. The stall detection solver of this repository implements the fast-forward of an earlier preprint by Claudio Vestini and Idris Kempf, "Fast-Forwarding Stalling in Dykstra's Algorithm", [arXiv:2511.18132](https://doi.org/10.48550/arXiv.2511.18132), 2025.
+
+## Setup
+
+The environment is defined in `pyproject.toml` and fixed in `uv.lock`, and it requires Python 3.10 to 3.13 and [uv](https://docs.astral.sh/uv/). From the repository root,
+
+```bash
+uv sync
+```
+
+creates `.venv` with numpy 2.1.1, matplotlib 3.9.2, and quadprog 0.1.12. The benchmark against general-purpose QP (quadratic programming) solvers and the activity study also depend on the dependency group named benchmark, installed with
+
+```bash
+uv sync --group benchmark
+```
+
+A plain `uv sync` removes that group from an existing `.venv` again, so keep the flag once you use it. Do not run the code under Python 3.14, for which numpy 2.1.1 does not have a wheel.
+
+The code is a package, `dykstra/`, that is run from the repository root and not installed. Run its modules as `python -m dykstra.<module>` with the environment's interpreter, e.g. `.venv/bin/python` or `uv run python`.
 
 ## Quick start
 
-From the repository root:
+From the repository root,
 
 ```bash
-python3.10 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-cd "Python/Working Version"
-python main.py
+.venv/bin/python -m dykstra.main
 ```
 
-The default example projects `[-2.0, 1.4]` onto the intersection of a unit box
-and the line `x / 2 + y = 1`. It prints the finite-iteration result and the
-quadratic-programming reference solution, then opens a 2-D visualisation.
+projects `[-2.0, 1.4]` onto the intersection of a unit box and the line `x / 2 + y = 1`, prints the finite-iteration result and the reference solution, and opens a 2-D visualisation. A graphical matplotlib backend is required for the window.
 
 ## Defining a projection problem
 
-Each row of `A` is a half-space normal and the corresponding entry in `b` is
-its offset:
+Each row of `A` is a half-space normal, and the corresponding entry of `b` is its offset:
 
 ```text
 A @ x <= b
 ```
 
-For example, the following projects a point onto a square:
+The following, run from the repository root, projects a point onto a square:
 
 ```python
 import numpy as np
 
-from convex_projection_solver import DykstraProjectionSolver
+from dykstra.convex_projection_solver import DykstraProjectionSolver
 
 z = np.array([-2.0, 1.4])
 A = np.array([
@@ -60,78 +64,57 @@ solver = DykstraProjectionSolver(z, A, b, max_iter=30, track_error=True)
 result = solver.solve()
 
 print(result.projection)
-print(solver.actual_projection)  # QP reference used for error tracking
+print(solver.actual_projection)  # quadprog reference used for error tracking
 ```
 
-The solver infers the dimension from `z` and validates that every constraint
-has the same dimension. Numerical solving works in any dimension; the supplied
-visualisers are for 2-D problems.
+The normals need not be of unit length. The solver infers the dimension from `z` and checks that every constraint has the same dimension. The numerics work in any dimension, while the visualisers are for 2-D problems.
 
-All supplied constraints are retained. A constraint that contains the starting
-point can still determine the projection, so `delete_spaces=True` is retained
-only as a deprecated compatibility option and no longer removes constraints.
+All supplied constraints are retained. A constraint that contains the starting point can still determine the projection, so `delete_spaces=True` is kept only as a deprecated option that warns and does not remove constraints.
 
 ## Solvers and outputs
 
 - `DykstraProjectionSolver` is the standard cyclic projection method.
-- `DykstraMapHybridSolver` combines MAP and Dykstra updates.
-- `DykstraStallDetectionSolver` includes the project's experimental
-  stalling-detection and fast-forwarding logic.
+- `DykstraMapHybridSolver` combines the method of alternating projections (MAP) with Dykstra's updates.
+- `DykstraStallDetectionSolver` detects a stalling period and skips it in one step, reaching the state plain Dykstra reaches after it.
 
-`solve()` returns a `ProjectionResult`. Optional fields are populated by the
-corresponding flags:
+`solve()` returns a `ProjectionResult`, whose optional fields are populated by the corresponding flags.
 
-- `track_error=True` records squared error against the QP reference solution.
-- `plot_errors=True` records correction vectors for quiver plots.
-- `plot_active_halfspaces=True` records constraint activity by cycle.
+- `track_error=True` records the squared error against the reference solution of quadprog, and classifies each cycle as converged, stalled, or neither.
+- `plot_errors=True` records the correction vectors for quiver plots.
+- `plot_active_halfspaces=True` records the activity of each constraint by cycle.
 
-`Visualiser` uses a horizontal layout and now scales to any number of activity
-traces. `VerticalVisualiser` combines the activity traces on one lower axis.
-`ComparisonVisualiser` supports side-by-side solver comparisons.
+`Visualiser` uses a horizontal layout and scales to any number of activity traces. `VerticalVisualiser` combines the activity traces on one lower axis. `ComparisonVisualiser` draws two solvers' results side by side. `ResultExporter` writes solver metadata, constraints, paths, errors, and activity to a sectioned CSV file, and its loader restores the arrays to their cycle-by-constraint shape.
 
-## LTI solver experiments
+The quadprog reference is exact, while a finite number of Dykstra cycles generally is not. A result of plain Dykstra is therefore an approximation of the projection after the stated number of cycles.
 
-`lti_solver.py` holds research-oriented accelerations of Dykstra's method. Between changes of the active half-space set, Dykstra's iteration is a linear time-invariant system, so an episode of constant activity can be stepped through its cycle map, evaluated in closed form or skipped, with one exact Dykstra cycle whenever the set changes. They use the same `A @ x <= b` problem definition as the core solvers.
+## The accelerated solvers
 
-`LTISolver` runs one of five presets, each adding one technique to the one before so that their effect can be compared. `LTIVer1Solver` to `LTIVer5Solver` name them:
+`dykstra/lti_solver.py` holds the accelerated solvers. Between changes of the active half-space set Dykstra's iteration is an LTI system, so an episode of constant activity can be stepped through its cycle map, evaluated in closed form, or skipped, with one exact Dykstra cycle whenever the set changes. The accelerated solvers take the same `A @ x <= b` problem as the core solvers.
+
+`LTISolver` runs one of five presets, each adding one technique to the one before so that their effect can be compared. `LTIVer1Solver` to `LTIVer5Solver` select them.
 
 - `cycle_map` (`LTIVer1Solver`) steps every cycle through the episode's cycle map.
 - `closed_form` (`LTIVer2Solver`) evaluates regular episodes in closed form and settles once the active set is proven final.
-- `envelope` (`LTIVer3Solver`) also jumps the runs of cycles an envelope bound certifies switch-free.
-- `frozen_stall` (`LTIVer4Solver`) also fast-forwards frozen stalls, in which only the auxiliaries move.
-- `deflated_modal` (`LTIVer5Solver`) also scans singular episodes in their deflated modal form, and settles only on a point that passes the KKT test.
+- `envelope` (`LTIVer3Solver`) also jumps the runs of cycles that an envelope bound certifies free of switches.
+- `frozen_stall` (`LTIVer4Solver`) also fast-forwards stalling periods, in which only the auxiliaries move.
+- `deflated_modal` (`LTIVer5Solver`), the accelerated solver of the paper, also scans singular episodes in their deflated modal form, and settles only on a point that passes the KKT (Karush–Kuhn–Tucker) test.
 
-Every preset returns Dykstra's own iterate after `max_iter` cycles unless it settles first, and records the same path, errors and corrections as `DykstraProjectionSolver` up to that point. A settled result holds the limit from `result.settled_at` on, and `result.certificate` says how it was proven: `"kkt"` means the point passed the KKT conditions and is the projection, to within `1e-9` of the distance moved beyond the rounding of the data, which nearly dependent active normals amplify; `"finality"` means the active set was proven final, with drifts below rounding taken as zero, and the point is the fixed point of the last cycle map. `result.is_settled()` tells a settled limit from the last iterate.
+Every preset returns Dykstra's iterate after `max_iter` cycles unless it settles first, and records the same path, errors, and corrections as `DykstraProjectionSolver` up to that point. A settled result holds the limit from `result.settled_at` on, and `result.certificate` records how it was proven. `"kkt"` means the point passed the KKT conditions and is the projection, to within `1e-9` of the distance moved beyond the rounding of the data, which nearly dependent active normals amplify. `"finality"` means the active set was proven final, with drifts below rounding taken as zero, and the point is the fixed point of the last cycle map. `result.is_settled()` tells a settled limit from the last iterate.
 
-`lti_numerics.py` holds the numerical pieces free of solver state. `oracle.py` uses them too: it records one Dykstra run's activity schedule and replays it with every change known in advance, for comparison.
+```python
+from dykstra.lti_solver import LTIVer5Solver
 
-`paper_figures.py` rebuilds the SIAM paper's figures from these solvers, and `performance_timing.py` times `DykstraProjectionSolver` and `LTIVer5Solver` to a fixed accuracy on your machine. Neither is `paper_figure.py`, the comparison run under Examples and exports below.
-
-Run any preset from the working-code directory; each has a matching runner, for example:
-
-```bash
-cd "Python/Working Version"
-python run_lti_ver5.py
-python run_oracle.py
+result = LTIVer5Solver(z, A, b, max_iter=30).solve()
+result.projection, result.settled_at, result.certificate
 ```
 
-`paper_figures.py` writes each figure as a PNG and a PDF into `Python/Working Version/results/paper`.
-Its last figure solves a 96-plane problem twice and takes a few seconds;
-the other three are analytic and immediate.
+The setting `schedule` decides at which episode entries `deflated_modal` tries the KKT test. `"work"`, the default, tries it at the first entry and afterwards only once the work done since the last failed test exceeds that test's work, `"every"` at every entry, `"doubling"` at entries 1, 2, 4, 8, and so on, and `"never"` not at all, so that the solver never settles. With `profile=True` a solver also leaves the time, the flops, and the counts of every stage of its last solve in `solver.profile`, without changing any output.
 
-`performance_timing.py` measures how long each solver needs to reach a squared
-error of `1e-3`, reports the median cycles and milliseconds per problem size,
-and plots the growth order. Timings are your own hardware's, so they will not
-match published ones; edit `TIERS` to change the sizes and the repeat count.
-
-```bash
-python paper_figures.py
-python performance_timing.py
-```
+`dykstra/lti_numerics.py` holds the numerical pieces that do not depend on solver state. `dykstra/oracle.py` uses them too: it records the activity schedule of one Dykstra run and replays it with every change known in advance, for comparison. Each preset and the oracle has a runner that opens a window, e.g. `.venv/bin/python -m dykstra.run_lti_ver5` and `.venv/bin/python -m dykstra.run_oracle`.
 
 ## C solvers
 
-`C/` holds two dependency-free C sources with the same `A @ x <= b` problem definition: `accelerated.c`, the `deflated_modal` preset of `LTISolver` (`LTIVer5Solver`), and `dykstra.c`, plain Dykstra, the baseline it is timed against. Neither records a history: each returns the final point, a status and a few counters. `accelerated.c` returns Dykstra's own iterate at the cycle budget unless it settles, and settles only on a point that passes the KKT test. It follows `lti_numerics.py` piece for piece, except that it scans a singular episode by iterating the contracting block rather than diagonalising it, estimates the condition number of `I - A_m`, and factors the Lawson-Hanson solves incrementally.
+`C/` holds two C sources without dependencies, for the same `A @ x <= b` problem: `accelerated.c`, the `deflated_modal` preset (`LTIVer5Solver`), and `dykstra.c`, plain Dykstra, the baseline it is timed against. The C solvers do not record a history, and each returns the final point, a status, a few counters, and the multipliers. `accelerated.c` returns Dykstra's iterate at the cycle budget unless it settles, and it settles only on a point that passes the KKT test. It follows `dykstra/lti_numerics.py` piece for piece, except that it scans a singular episode by iterating the contracting block rather than diagonalising it, estimates the condition number of `I - A_m`, factors the Lawson-Hanson solves incrementally, and drops every coordinate that is not touched by any constraint before the solve.
 
 Build the two shared libraries in place, from the repository root:
 
@@ -140,96 +123,75 @@ make -C C                                              # gcc or clang
 powershell -ExecutionPolicy Bypass -File C/build.ps1   # Windows, MSVC
 ```
 
-Then call them through `c_solvers.py` in the working-code directory:
+Then call them through `dykstra/c_solvers.py`, which finds the libraries in `C/` whatever the working directory:
 
 ```python
-from c_solvers import accelerated_c_projection, dykstra_c_projection
+from dykstra.c_solvers import accelerated_c_projection, dykstra_c_projection
 
-result = accelerated_c_projection(z, A, b, max_iter)
+result = accelerated_c_projection(z, A, b, max_iter, schedule="work")
 result.projection, result.settled, result.cycles, result.multipliers
 ```
 
-`tests/test_c_solvers.py` holds both to the LTI contract and is skipped until the libraries are built. The tests have been run on the MSVC build. With the Makefile's flags clang compiles both sources without warnings for Linux and macOS, x86-64 and arm64, and a clang build for Windows gives the MSVC build's results bit for bit; the Makefile itself has not been run.
+The C accelerated solver takes the same `schedule` as `LTIVer5Solver`, tries the KKT test at the same entries, and settles on the same cycle, which `tests/test_c_solvers.py` checks under all four values.
 
-## Examples and exports
+`tests/test_c_solvers.py` holds both to the contract of the Python accelerated solver and is skipped until the libraries are built. The suite has been run against the Makefile build on macOS arm64 with Apple clang. `C/build.ps1` builds the libraries with MSVC on Windows, and the current sources have not been tested with that build.
 
-Run the comparison used for the paper from the working-code directory:
+## Reproducing the paper's figures and tables
+
+Every figure and table drawn from data in the paper and its supplement has a script in `dykstra/`, and each script runs from the repository root with one command, e.g.
 
 ```bash
-cd "Python/Working Version"
-python paper_figure.py
+.venv/bin/python -m dykstra.paper_figures
+.venv/bin/python -m dykstra.performance_timing
 ```
 
-`ResultExporter` writes solver metadata, constraints, paths, errors, and
-activity information to CSV. The loader restores the recorded path and error
-arrays to their original cycle-by-constraint shape.
+The [command table in AGENTS.md](AGENTS.md#reproducing-the-figures-and-tables) gives the script, the command, and the output files for each figure and table. The scripts write into `results/paper` at the repository root, which git ignores, as PNG and PDF figures, TikZ or pgfplots code for the figures drawn inline in the paper, and LaTeX table rows. Each script prints every number quoted in the paper from its outputs, and takes `--quick` for a short run into a temporary directory. The timing scripts print the machine, the compiler, the package versions, and the method, and their timings are those of the machine they run on. `benchmark.py`, `activity_study.py`, and `singular_phases.py` depend on the benchmark group, and the C libraries must be built before `performance_timing.py`, `benchmark.py`, `c_validation.py`, `cost_model.py`, `compaction_only.py`, and `oracle_comparison.py` are run in full. `benchmark.py --family all` runs the benchmark on the dense, wedge, and stall families and writes the headline table with all three.
 
 ## Tests
 
-After installing the requirements, run the regression suite from the repository
-root:
+From the repository root,
 
 ```bash
-python -m unittest discover -s tests -v
+.venv/bin/python -m unittest discover -s tests
 ```
+
+runs 268 tests. With the C libraries built and the benchmark group installed, the suite skips none of them.
 
 ## Repository layout
 
 ```text
 .
 ├── README.md
-├── AGENTS.md                    # operating guide for coding agents
+├── AGENTS.md                    # operating guide for coding agents, with the command table
 ├── ARCHITECTURE.md              # how the code is put together
-├── requirements.txt
-├── Latex/
-│   ├── Current Version/         # Current report and paper sources
-│   │   └── Sections/
-│   │       ├── 1-Introduction.tex
-│   │       ├── 2-Dykstra Background.tex
-│   │       ├── 3-Main Results.tex
-│   │       ├── 4-Numerical Example.tex
-│   │       └── 5-Conclusion.tex
-│   └── Initial Version/         # Earlier report material
-├── Python/
-│   ├── Working Version/         # Current implementation
-│   │   ├── main.py              # Interactive 2-D example
-│   │   ├── paper_figure.py      # Comparison figure runner
-│   │   ├── convex_projection_solver.py
-│   │   ├── visualiser.py
-│   │   ├── projection_result.py
-│   │   ├── gradient.py
-│   │   ├── edge_rounder.py
-│   │   ├── lti_solver.py         # LTISolver and its five presets
-│   │   ├── lti_numerics.py       # Cycle maps, closed forms, the KKT test
-│   │   ├── lti_examples.py       # Shared LTI demo setup
-│   │   ├── oracle.py             # Activity-schedule replay experiment
-│   │   ├── paper_figures.py      # Write-up figure rebuilds
-│   │   ├── performance_timing.py # Solver timing on the local machine
-│   │   ├── c_solvers.py          # ctypes access to the C solvers
-│   │   └── bin/                 # Legacy helper implementations
-│   └── Previous Versions/       # Development history
-├── C/                           # accelerated.c, dykstra.c and their build files
-├── results/                     # Saved experiment output
-└── tests/                       # Regression tests
+├── pyproject.toml, uv.lock      # the environment
+├── dykstra/                     # the package, run as python -m dykstra.<module>
+│   ├── convex_projection_solver.py  # the three core solvers
+│   ├── projection_result.py
+│   ├── gradient.py              # the quadprog reference projection
+│   ├── visualiser.py            # visualisers and CSV export
+│   ├── edge_rounder.py
+│   ├── lti_solver.py            # LTISolver and its five presets
+│   ├── lti_numerics.py          # cycle maps, closed forms, the KKT test
+│   ├── oracle.py                # activity-schedule replay
+│   ├── c_solvers.py             # ctypes access to the C solvers
+│   ├── problem_generators.py    # the supplement's two generators and the wedge and stall families
+│   ├── paper_figures.py, performance_timing.py, benchmark.py, cost_model.py, compaction_only.py,
+│   ├── square_line_example.py, c_validation.py, stall_grid.py, stall_angles.py,
+│   ├── activity_study.py, activity_figures.py, activity_conjecture.py,
+│   ├── singular_phases.py, oracle_comparison.py
+│   │                            # the figure and table scripts
+│   ├── main.py, paper_figure.py # interactive 2-D examples
+│   └── lti_examples.py, run_*.py
+├── C/                           # accelerated.c, dykstra.c, and their build files
+├── tests/                       # unittest suite
+└── results/                     # written by the scripts, ignored by git
 ```
 
-## Notes
+Everything removed from the tree remains in git history, i.e. the earlier report and paper sources in `Latex/`, the development versions in `Python/Previous Versions/`, the superseded implementations in `Python/Working Version/bin/`, the recorded CSV files, and `requirements.txt`.
 
-The code uses `quadprog` to obtain a reference projection for error reporting.
-This reference is useful for experiments, but a finite number of Dykstra cycles
-is generally an approximation rather than an exact projection.
-
-The mathematical report lives under
-[`Latex/Current Version`](Latex/Current%20Version).
-
-The reference papers and the grant-application material are not in this
-repository. They are third-party or personal documents that are not ours to
-redistribute, so they are kept outside it, alongside the checkout, and both
-directory names are gitignored. The report's bibliography is the list of
-references.
+The reference papers and the grant-application material are kept outside this repository. They are third-party or personal documents that are not ours to redistribute, and both folder names are gitignored. The paper's bibliography is the list of references.
 
 ## Author and funding
 
-Claudio Vestini — University of Oxford
-
-Project funded by Keble Research Grant KSRG118.
+The repository's author is Claudio Vestini, University of Oxford. The project was funded by Keble Research Grant KSRG118.
