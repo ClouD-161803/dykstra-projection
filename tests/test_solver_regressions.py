@@ -180,6 +180,20 @@ class SolverRegressionTests(unittest.TestCase):
         self.assertAlmostEqual(result.squared_errors[7] / scale ** 2, 0.512, places=9)
         self.assertFalse((~np.isnan(result.converged_errors)).any())
 
+    def test_stall_classification_does_not_depend_on_the_scale(self) -> None:
+        """From (-4, 1.4) plain Dykstra holds squared error 0.8 for cycles 1 to 16, so
+        cycles 2 to 16 are stalled. Scaled by 1e6 the squared errors carry rounding noise
+        of about 1e-4, which an absolute rounding to ten decimals kept, and only cycles 2
+        to 4 and 13 to 16 were classified as stalled."""
+        for scale in (1.0, 1e-6, 1e6):
+            with self.subTest(scale=scale):
+                result = DykstraProjectionSolver(
+                    scale * np.array([-4.0, 1.4]), BOX_LINE_A, scale * BOX_LINE_B, 30,
+                    track_error=True, min_error=1e-3 * scale ** 2,
+                ).solve()
+                self.assertEqual(np.flatnonzero(~np.isnan(result.stalled_errors)).tolist(),
+                                 list(range(2, 17)))
+
 
 if __name__ == "__main__":
     unittest.main()
