@@ -1,6 +1,8 @@
 """The stall grid of the SIAM paper's supplement, section Additional stall studies: the share of
-random problems per size (n, p) with a stalling period and with an approximate stall, which
-fig:sm-stall-frozen and fig:sm-stall-plateau show.
+random problems per size (n, p) with a stalling period and with an approximate stall. The
+article's fig:stallfreq draws the share with a stalling period as a matrix plot from
+fig-stallgrid-stationary.tex. The two heat maps, stall_grid_frozen and stall_grid_plateau, are
+written as PNG and PDF for checking and are not included by either document.
 
 Run from the repository root with `python -m dykstra.stall_grid`, or with `--quick` for a small
 grid written to a temporary directory. Every problem is a Generator 2 polyhedron from
