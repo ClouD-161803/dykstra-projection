@@ -10,7 +10,7 @@ import warnings
 import numpy as np
 
 from dykstra.convex_projection_solver import DykstraProjectionSolver
-from dykstra import lti_numerics
+from dykstra import lti_numerics, problem_generators
 from dykstra.lti_numerics import nonnegative_least_squares, nonnegative_quadratic
 from dykstra import lti_solver
 from dykstra.lti_solver import (LTIVer1Solver, LTIVer2Solver, LTIVer3Solver, LTIVer4Solver,
@@ -1702,6 +1702,24 @@ class LTIProfileTests(unittest.TestCase):
         solver = LTIVer5Solver(z, A, b, 8)
         solver.solve()
         self.assertIsNone(solver.profile)
+
+
+class FrozenFloorTests(unittest.TestCase):
+    def test_a_stalling_state_of_a_rotated_box_is_frozen_on_every_cycle_of_the_stall(self) -> None:
+        # Problem 2 of the p = 8 tier of benchmark.py's stall family is stationary from cycle 1,
+        # with every rotated face orthogonal to rounding, while its auxiliaries drain. is_frozen
+        # charged each coordinate with its own magnitudes, and coordinate 7, at 0.18 beside
+        # others near 3, failed on 9 of the cycles 2 to 39
+        A, b, z = problem_generators.BoxSlabTestPlanes(8).problem(6_008_002)
+        unit_A, unit_b = lti_numerics.unit_constraints(A, b)
+        x, y, _ = lti_numerics.exact_cycle(z, np.zeros(len(b)), unit_A, unit_b)
+        active = tuple(y > 0.0)
+        cmap = lti_numerics.cycle_map(unit_A, unit_b, active)
+        for cycle in range(2, 40):
+            with self.subTest(cycle=cycle):
+                self.assertTrue(lti_numerics.is_frozen(cmap, x))
+            x, y, _ = lti_numerics.exact_cycle(x, y, unit_A, unit_b)
+            self.assertEqual(tuple(y > 0.0), active)
 
 
 if __name__ == "__main__":
