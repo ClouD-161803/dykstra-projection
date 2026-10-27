@@ -619,5 +619,86 @@ class EdgeCaseTests(unittest.TestCase):
             np.testing.assert_array_equal(projection, reference.projection)
 
 
+class PaperExampleTests(unittest.TestCase):
+    """The box and line of paper_figure.py and main.py, from (-2, 1.4) over 30 cycles.
+
+    Both scripts build the same problem. From cycle 7 on, plain Dykstra's squared error
+    falls by a factor 0.64 per cycle, from 0.8 at cycle 6.
+    """
+
+    z = np.array([-2.0, 1.4])
+
+    def test_plain_dykstra_and_the_fast_forward_against_quadprog(self) -> None:
+        plain_solver = DykstraProjectionSolver(self.z, BOX_LINE_A, BOX_LINE_B, 34,
+                                               track_error=True, plot_active_halfspaces=True)
+        plain = plain_solver.solve()
+        np.testing.assert_allclose(plain_solver.actual_projection, [0.0, 1.0], rtol=0.0,
+                                   atol=1e-15)
+        expected = 0.8 * 0.64 ** np.arange(-6.0, 29.0).clip(min=0.0)
+        np.testing.assert_allclose(plain.squared_errors[1:], expected[1:], rtol=1e-9,
+                                   atol=1e-10)
+        self.assertEqual(np.flatnonzero(stall_mask(plain)).tolist(), [2, 3, 4, 5, 6])
+
+        fast, jumps = run(DykstraStallDetectionSolver, self.z, BOX_LINE_A, BOX_LINE_B, 30,
+                          track_error=True, plot_active_halfspaces=True)
+        self.assertEqual(jumps, [(2, 4)])
+        # 30 fast-forwarded cycles stand for 34 of plain Dykstra
+        np.testing.assert_allclose(fast.projection, plain.projection, rtol=0.0, atol=1e-12)
+        self.assertAlmostEqual(fast.squared_errors[-1], plain.squared_errors[-1], delta=1e-10)
+        self.assertAlmostEqual(fast.squared_errors[-1], 0.8 * 0.64 ** 28, delta=1e-10)
+
+    def test_main_script_problem_with_every_tracking_flag(self) -> None:
+        """main.py runs a solver with error tracking, the correction vectors and the
+        activity record switched on. The hybrid does not stall on this problem: its squared
+        error falls by the factor 0.64 from 0.8 at cycle 1."""
+        options = dict(track_error=True, plot_errors=True, plot_active_halfspaces=True)
+        plain, _ = run(DykstraProjectionSolver, self.z, BOX_LINE_A, BOX_LINE_B, 30, **options)
+        fast, _ = run(DykstraStallDetectionSolver, self.z, BOX_LINE_A, BOX_LINE_B, 30,
+                      **options)
+        hybrid, _ = run(DykstraMapHybridSolver, self.z, BOX_LINE_A, BOX_LINE_B, 30, **options)
+        self.assertAlmostEqual(plain.squared_errors[-1], 0.8 * 0.64 ** 24, delta=1e-10)
+        self.assertAlmostEqual(fast.squared_errors[-1], 0.8 * 0.64 ** 28, delta=1e-10)
+        self.assertAlmostEqual(hybrid.squared_errors[-1], 0.8 * 0.64 ** 29, delta=1e-10)
+        for result in (plain, fast, hybrid):
+            self.assertEqual(result.errors_for_plotting.shape, (30, 6, 2))
+            self.assertEqual(result.active_half_spaces.shape, (6, 31))
+            self.assertLessEqual(visit_excess(result, BOX_LINE_A, BOX_LINE_B), 1e-12)
+
+
+class ExportRoundTripTests(unittest.TestCase):
+    def test_every_tracked_array_survives_export_and_load(self) -> None:
+        """paper_figure.py exports both of its results into a directory. Loading either
+        file gives back every array exactly, with NaN where a cycle was not stalled or not
+        converged."""
+        z = np.array([-2.0, 1.4])
+        options = dict(track_error=True, plot_errors=True, plot_active_halfspaces=True)
+        for name, solver_type in (("Dykstra", DykstraProjectionSolver),
+                                  ("Algorithm (1)", DykstraStallDetectionSolver)):
+            with self.subTest(solver=name):
+                result, _ = run(solver_type, z, BOX_LINE_A, BOX_LINE_B, 30, **options)
+                with tempfile.TemporaryDirectory() as directory:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        ResultExporter.export(result, directory, name, z, BOX_LINE_A,
+                                              BOX_LINE_B, 30, **options)
+                    path = Path(directory) / f"{name}_30_iterations.csv"
+                    loaded = ResultExporter.load(str(path))
+
+                self.assertEqual(loaded["metadata"]["solver_name"], name)
+                self.assertEqual(loaded["metadata"]["max_iterations"], 30)
+                self.assertEqual(loaded["metadata"]["dimensions"], 2)
+                self.assertEqual(loaded["metadata"]["num_constraints"], 6)
+                for key, expected in (("initial_point", z),
+                                      ("final_projection", result.projection),
+                                      ("constraints_A", BOX_LINE_A),
+                                      ("constraints_b", BOX_LINE_B),
+                                      ("path", result.path),
+                                      ("squared_errors", result.squared_errors),
+                                      ("stalled_errors", result.stalled_errors),
+                                      ("converged_errors", result.converged_errors),
+                                      ("errors_for_plotting", result.errors_for_plotting),
+                                      ("active_halfspaces", result.active_half_spaces)):
+                    np.testing.assert_array_equal(loaded[key], expected, err_msg=key)
+
+
 if __name__ == "__main__":
     unittest.main()
