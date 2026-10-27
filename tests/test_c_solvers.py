@@ -10,7 +10,9 @@ from dykstra.c_solvers import (
     dykstra_c_projection,
     libraries_built,
 )
+from dykstra import problem_generators
 from dykstra.convex_projection_solver import DykstraProjectionSolver
+from dykstra.lti_solver import SCHEDULES, LTIVer5Solver
 from dykstra.paper_figures import bounded_problem, infeasible_start
 
 
@@ -37,6 +39,22 @@ def bounded_problems() -> list:
             np.random.seed(1000 * num_planes + seed)
             A, b = bounded_problem(num_planes, num_dimensions)
             problems.append((infeasible_start(A, b, num_dimensions), A, b))
+    return problems
+
+
+def tier_problem(num_planes: int, num_dimensions: int, index: int) -> tuple:
+    """Problem index of a tier of tab:dykvsacc, as (z, A, b)."""
+    A, b, z = problem_generators.problem(num_planes, num_dimensions,
+                                         problem_generators.problem_seed(num_planes, index))
+    return z, A, b
+
+
+def box_slab_problems() -> list:
+    """Problem 0 of each tier of benchmark.py's stall family, as (z, A, b)."""
+    problems = []
+    for p in (2, 4, 8):
+        A, b, z = problem_generators.BoxSlabTestPlanes(p).problem(6_000_000 + 1000 * p)
+        problems.append((z, A, b))
     return problems
 
 
@@ -253,6 +271,70 @@ class CSolverTests(unittest.TestCase):
                             (z, A, b, MAX_CYCLES + 1), (z, A, b, -1)):
                     with self.assertRaises(ValueError):
                         solve(*bad)
+
+
+@unittest.skipUnless(libraries_built(), "build the C solvers first, see the README")
+class CScheduleTests(unittest.TestCase):
+    def test_every_schedule_tests_and_certifies_where_the_python_does(self) -> None:
+        # The schedule counts work from sizes both solvers share, so the C tries the KKT test at
+        # the same phase entries as LTIVer5Solver, certifies on the same cycle, and counts the
+        # same work
+        problems = ([box_line_problem()] + bounded_problems() + [tier_problem(24, 8, index) for index in range(5)]
+                    + [tier_problem(96, 32, 3)])
+        for schedule in SCHEDULES:
+            budget = 600 if schedule == "never" else 6000
+            for index, (z, A, b) in enumerate(problems):
+                with self.subTest(schedule=schedule, problem=index):
+                    solver = LTIVer5Solver(z, A, b, max_iter=budget, schedule=schedule)
+                    result = solver.solve()
+                    accelerated = accelerated_c_projection(z, A, b, budget, schedule=schedule)
+                    self.assertEqual(accelerated.settled, result.certificate == "kkt")
+                    if accelerated.settled:
+                        self.assertIn(accelerated.cycles, (result.settled_at - 1, result.settled_at))
+                        self.assertEqual(accelerated.settled_at, result.settled_at)
+                    else:
+                        self.assertEqual((accelerated.cycles, accelerated.settled_at), (budget, None))
+                    record = solver.kkt_record
+                    self.assertEqual(
+                        (accelerated.kkt_attempts, accelerated.entry_tests, accelerated.failed_entry_work,
+                         accelerated.work),
+                        (record["kkt_attempts"], record["entry_tests"], record["failed_entry_work"], record["work"]))
+                    np.testing.assert_allclose(accelerated.projection, result.projection, rtol=0.0,
+                                               atol=1e-11 * float(np.abs(z).max()))
+
+    def test_failed_kkt_tests_cost_at_most_the_rest_of_the_work(self) -> None:
+        # On the 96 x 32 problem of fig:performance the per-phase schedule pays more for its 44
+        # failed entry tests than for everything else
+        z, A, b = tier_problem(96, 32, 3)
+        every = accelerated_c_projection(z, A, b, 6000, schedule="every")
+        self.assertGreater(every.failed_entry_work, every.work)
+        work = accelerated_c_projection(z, A, b, 6000, schedule="work")
+        self.assertTrue(work.settled)
+        self.assertLessEqual(work.failed_entry_work, work.work)
+        self.assertLess(work.entry_tests, every.entry_tests)
+
+    def test_never_returns_dykstras_iterate_at_every_budget(self) -> None:
+        for z, A, b in [box_line_problem()] + bounded_problems() + box_slab_problems():
+            path = DykstraProjectionSolver(z, A, b, max_iter=120).solve().path
+            scale = np.abs(z).max()
+            for max_iter in range(1, 121):
+                with self.subTest(constraints=A.shape[0], dimensions=A.shape[1], max_iter=max_iter):
+                    result = accelerated_c_projection(z, A, b, max_iter, schedule="never")
+                    self.assertFalse(result.settled)
+                    self.assertEqual((result.cycles, result.kkt_attempts), (max_iter, 0))
+                    np.testing.assert_allclose(result.projection, path[max_iter, -1], rtol=0.0, atol=1e-9 * scale)
+        for max_iter in (0, 5):
+            with self.subTest(constraints=0, max_iter=max_iter):
+                result = accelerated_c_projection(np.ones(2), np.zeros((0, 2)), np.zeros(0), max_iter,
+                                                  schedule="never")
+                self.assertEqual((result.settled, result.cycles), (False, max_iter))
+
+    def test_schedule_is_one_of_four(self) -> None:
+        z, A, b = box_line_problem()
+        for schedule in ("Work", 1, None):
+            with self.subTest(schedule=schedule):
+                with self.assertRaisesRegex(ValueError, "schedule"):
+                    accelerated_c_projection(z, A, b, 10, schedule=schedule)
 
 
 if __name__ == "__main__":

@@ -408,6 +408,7 @@ class StressTests(unittest.TestCase):
                     self.assertEqual(accelerated.exact_cycles, len(exact_cycles))
                     if accelerated.settled:
                         self.assertIn(accelerated.cycles, (result.settled_at - 1, result.settled_at))
+                        self.assertEqual(accelerated.settled_at, result.settled_at)
                     else:
                         self.assertEqual(accelerated.cycles, budget)
                     np.testing.assert_allclose(accelerated.projection, result.projection, rtol=0.0,

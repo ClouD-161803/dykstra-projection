@@ -1722,5 +1722,141 @@ class FrozenFloorTests(unittest.TestCase):
             self.assertEqual(tuple(y > 0.0), active)
 
 
+def tier_problem(num_planes: int, num_dimensions: int, index: int) -> tuple:
+    """Problem index of a tier of tab:dykvsacc, as (z, A, b)."""
+    A, b, z = problem_generators.problem(num_planes, num_dimensions,
+                                         problem_generators.problem_seed(num_planes, index))
+    return z, A, b
+
+
+def schedule_problems() -> dict:
+    """Problems whose settle cycles under the schedule every the existing tests record, each with
+    that cycle."""
+    # Trying the KKT test at every phase entry certifies problems 0 to 4 of the 24 x 8 tier at
+    # cycles 310, 2, 24, 11 and 5, the 96 x 32 problem of fig:performance at cycle 551 after 44
+    # phases, and the plane of test_untouched_coordinate_does_not_change_the_settlement at cycle 6
+    problems = {f"24 x 8, problem {index}": (tier_problem(24, 8, index), cycle)
+                for index, cycle in enumerate((310, 2, 24, 11, 5))}
+    problems["96 x 32, problem 3"] = (tier_problem(96, 32, 3), 551)
+    problems["plane"] = ((np.array([-1.75, -1.5]), np.array([[-0.5, -1.0], [0.5, -0.25], [-0.5, -0.25]]),
+                          np.array([0.375, 0.1875, -0.0625])), 6)
+    return problems
+
+
+def kkt_overhead(z: np.ndarray, A: np.ndarray, b: np.ndarray, schedule: str, budget: int = 6000) -> tuple:
+    """The work of the failed KKT tests at phase entries and the rest of the work in the
+    schedule's unit, rebuilt from the exact cycles and the KKT tests of a profiled solve, then
+    the result and the solver."""
+    solver = LTIVer5Solver(z, A, b, max_iter=budget, profile=True, schedule=schedule)
+    exact = []
+    run_exact_cycle = solver._exact_cycle
+
+    def recorded(cycle: int) -> tuple:
+        active = run_exact_cycle(cycle)
+        exact.append((cycle, int(sum(active))))
+        return active
+
+    solver._exact_cycle = recorded
+    result = solver.solve()
+    n, p = A.shape[0], int(np.count_nonzero(np.any(A != 0.0, axis=0)))
+    entry_tests = {test["cycle"]: test for test in solver.profile["kkt_tests"] if test["at"] == "episode entry"}
+    failed = rest = 0
+    # A phase starts after an exact cycle and its cycle map; unless its entry test certifies, its
+    # setup follows, and every cycle it covers before the next exact cycle counts as one cycle
+    for index, (cycle, active) in enumerate(exact):
+        rest += lti_numerics.cycle_work(n, p, active) + lti_numerics.cycle_map_work(n, p, active)
+        test = entry_tests.get(cycle + 1)
+        if test is not None and test["passed"]:
+            break
+        if test is not None:
+            failed += lti_numerics.kkt_test_work(n, p, active, test["candidates"])
+        rest += lti_numerics.phase_setup_work(n, p)
+        if index + 1 < len(exact):
+            rest += (exact[index + 1][0] - cycle - 1) * lti_numerics.cycle_work(n, p, active)
+    return failed, rest, result, solver
+
+
+class KKTScheduleTests(unittest.TestCase):
+    def test_failed_kkt_tests_cost_at_most_the_rest_of_the_work(self) -> None:
+        # On the 96 x 32 problem of fig:performance a KKT test at a phase entry costs more than
+        # the work of the phase it is tried in, and the limit of a singular phase certifies on
+        # cycle 551, hence the per-phase schedule pays more for its 44 failed entry tests than
+        # for everything else
+        z, A, b = tier_problem(96, 32, 3)
+        every, every_rest, _, _ = kkt_overhead(z, A, b, "every")
+        self.assertGreater(every, every_rest)
+        failed, rest, result, solver = kkt_overhead(z, A, b, "work")
+        self.assertEqual(result.certificate, "kkt")
+        self.assertGreaterEqual(solver.profile["counts"]["episodes"], 20)
+        self.assertLessEqual(failed, rest)
+        record = solver.kkt_record
+        self.assertEqual((record["failed_entry_work"], record["work"]), (failed, rest))
+        self.assertEqual(record["kkt_attempts"], solver.profile["counts"]["kkt_attempts"])
+
+    def test_every_schedule_certifies_the_projection_and_every_keeps_its_settle_cycles(self) -> None:
+        for name, ((z, A, b), every_cycle) in schedule_problems().items():
+            projections = {}
+            for schedule in ("work", "every", "doubling"):
+                with self.subTest(problem=name, schedule=schedule):
+                    solver = LTIVer5Solver(z, A, b, max_iter=6000, schedule=schedule)
+                    result = solver.solve()
+                    self.assertEqual(result.certificate, "kkt")
+                    projection = solver.actual_projection
+                    bound = 1e-9 * float(np.linalg.norm(z - projection)) + 1e-12 * float(np.abs(z).max())
+                    self.assertLessEqual(float(np.linalg.norm(result.projection - projection)), bound)
+                    if schedule == "every":
+                        self.assertEqual(result.settled_at, every_cycle)
+                    projections[schedule] = result.projection
+            for schedule in ("work", "doubling"):
+                with self.subTest(problem=name, schedule=schedule, against="every"):
+                    np.testing.assert_allclose(projections[schedule], projections["every"], rtol=0.0,
+                                               atol=1e-9 * float(np.linalg.norm(z - projections["every"])))
+
+    def test_doubling_tries_the_test_at_phase_entries_one_two_four_and_so_on(self) -> None:
+        z, A, b = tier_problem(96, 32, 3)
+        solver = LTIVer5Solver(z, A, b, max_iter=6000, profile=True, schedule="doubling")
+        # phase k starts on the cycle after the k-th exact cycle, the first being cycle 1
+        exact_cycles = spy_exact_cycles(solver)
+        solver.solve()
+        tested = [exact_cycles.index(test["cycle"] - 1) + 1 for test in solver.profile["kkt_tests"]
+                  if test["at"] == "episode entry"]
+        self.assertEqual(tested, [2 ** k for k in range(len(tested))])
+        self.assertGreaterEqual(len(tested), 4)
+
+    def test_never_returns_dykstras_iterate_at_every_budget(self) -> None:
+        # Without the KKT test the deflated_modal preset never settles, and it compacts and
+        # fast-forwards Dykstra's own path, here through the stalls of the box and slab
+        problems = {"box and line": box_line_problem(), "24 x 8, problem 0": tier_problem(24, 8, 0)}
+        for p in (2, 4, 8):
+            A, b, z = problem_generators.BoxSlabTestPlanes(p).problem(6_000_000 + 1000 * p)
+            problems[f"box and slab, p = {p}"] = (z, A, b)
+        for name, (z, A, b) in problems.items():
+            dykstra = DykstraProjectionSolver(z, A, b, max_iter=400, plot_errors=True).solve()
+            scale = float(np.abs(z).max())
+            for budget in (1, 2, 7, 60, 400):
+                with self.subTest(problem=name, budget=budget):
+                    solver = LTIVer5Solver(z, A, b, max_iter=budget, profile=True, plot_errors=True,
+                                           schedule="never")
+                    result = solver.solve()
+                    self.assertFalse(result.is_settled())
+                    self.assertEqual(solver.profile["counts"]["kkt_attempts"], 0)
+                    np.testing.assert_allclose(result.path, dykstra.path[:budget + 1], rtol=0.0, atol=1e-9 * scale)
+                    np.testing.assert_allclose(result.errors_for_plotting, dykstra.errors_for_plotting[:budget],
+                                               rtol=0.0, atol=1e-9 * scale)
+        z = np.array([1.0, 2.0])
+        result = LTIVer5Solver(z, np.empty((0, 2)), np.empty(0), max_iter=5, schedule="never").solve()
+        self.assertFalse(result.is_settled())
+        np.testing.assert_array_equal(result.projection, z)
+
+    def test_schedule_is_one_of_four_and_defaults_to_work(self) -> None:
+        z, A, b = box_line_problem()
+        self.assertEqual(lti_solver.SCHEDULES, ("work", "every", "doubling", "never"))
+        self.assertEqual(LTIVer5Solver(z, A, b, max_iter=1).schedule, "work")
+        for schedule in ("Work", "per-phase", 0, None):
+            with self.subTest(schedule=schedule):
+                with self.assertRaisesRegex(ValueError, "schedule"):
+                    LTIVer5Solver(z, A, b, max_iter=1, schedule=schedule)
+
+
 if __name__ == "__main__":
     unittest.main()
