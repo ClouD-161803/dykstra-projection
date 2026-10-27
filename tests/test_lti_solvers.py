@@ -69,8 +69,8 @@ class LTISolverRegressionTests(unittest.TestCase):
             ),
             "rank-deficient line": (
                 np.array([2.0, 3.0]),
-                np.array([[2.0, 0.0], [-3.0, 0.0]]),
-                np.array([0.0, 0.0]),
+                np.array([[2.0, 0.0], [-3.0, 0.0], [0.0, 1.0]]),
+                np.array([0.0, 0.0, 4.0]),
             ),
         }
 
@@ -167,8 +167,10 @@ class LTISolverRegressionTests(unittest.TestCase):
 
     def test_frozen_drain_far_past_the_budget_returns_promptly(self) -> None:
         # In the three-planes case the draining auxiliary would cross about 2.5e30 cycles
-        # out, where refining the crossing one cycle at a time never terminates; the
-        # narrow wedge reached the same loop through Ver5 until Ver5 certified it at entry
+        # out, where refining the crossing one cycle at a time never terminates. The
+        # narrow wedge reached the same loop through Ver5 until Ver5 certified it at entry.
+        # In each, only the last row, which never activates, touches the third coordinate,
+        # so the episodes are singular and stepped into the frozen-stall crossing
         if not hasattr(signal, "setitimer") or threading.current_thread() is not threading.main_thread():
             self.skipTest("the hang guard needs SIGALRM on the main thread")
 
@@ -178,13 +180,13 @@ class LTISolverRegressionTests(unittest.TestCase):
         cases = {
             "far point, three planes": (
                 np.array([-1e30, 1.0, 0.0]),
-                np.array([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [-0.5, -1.0, 0.0]]),
-                np.array([0.0, 0.0, -1.0]),
+                np.array([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [-0.5, -1.0, 0.0], [0.0, 0.0, 1.0]]),
+                np.array([0.0, 0.0, -1.0, 1.0]),
             ),
             "far point, narrow wedge": (
                 1e25 * np.array([-3.0, -2.6, 0.0]),
-                np.array([unit(70.0), -unit(68.0), -unit(68.0)]),
-                np.array([-0.3, 0.6, -0.6]),
+                np.array([unit(70.0), -unit(68.0), -unit(68.0), [0.0, 0.0, 1.0]]),
+                np.array([-0.3, 0.6, -0.6, 1.0]),
             ),
         }
 
@@ -315,12 +317,14 @@ class LTISolverRegressionTests(unittest.TestCase):
 
     def test_frozen_stall_test_is_invariant_under_scaling_the_problem(self) -> None:
         # At scale 1e-9 cycle 2 of the first problem moves the state by 0.25 * scale,
-        # which is not a frozen stall however small it is in absolute terms
+        # which is not a frozen stall however small it is in absolute terms. Only its row
+        # 2, which never activates, touches the third coordinate, so its episodes are
+        # singular and stepped, with the frozen-stall test probing them
         cases = {
             "moving wedge": (
                 np.array([1.0, 0.0, 0.0]),
-                np.array([[1.0, 1.0, 0.0], [1.0, 0.0, 0.0]]),
-                np.zeros(2),
+                np.array([[1.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]),
+                np.array([0.0, 0.0, 1.0]),
             ),
             "rank-deficient episodes": (
                 np.array([-2.5773951085302205, -4.631028893964539, 0.7036526127117877]),
@@ -595,16 +599,19 @@ class LTISolverRegressionTests(unittest.TestCase):
 
     def test_frozen_stall_is_fast_forwarded_whatever_the_budget(self) -> None:
         # The first state stays frozen while an auxiliary drains towards a crossing about
-        # 2e6 cycles away, past the budget; the second freezes only after a few stepped
-        # cycles, because its first and last active normals are orthogonal
+        # 2e6 cycles away, past the budget. The second freezes only after a few stepped
+        # cycles, because its first and last active normals are orthogonal. In each, only
+        # the last row, which never activates, touches the last coordinate, so the
+        # episodes are singular and stepped
         r2 = np.sqrt(2.0)
         cases = {
             "crossing past the budget": (np.array([1e6, 0.0]),
-                                         np.array([[1.0, 0.0], [-1.0, 0.0], [1.0, 0.0]]),
-                                         np.array([1.0, 0.0, 0.5])),
+                                         np.array([[1.0, 0.0], [-1.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+                                         np.array([1.0, 0.0, 0.5, 1.0])),
             "frozen part-way through": (np.array([10.0, 3.0, 0.5]),
-                                      np.array([[1.0, 0.0, 0.0], [1 / r2, 1 / r2, 0.0], [0.0, 1.0, 0.0]]),
-                                      np.array([1.0, r2 - 1e-4, 1.0])),
+                                      np.array([[1.0, 0.0, 0.0], [1 / r2, 1 / r2, 0.0], [0.0, 1.0, 0.0],
+                                                [0.0, 0.0, 1.0]]),
+                                      np.array([1.0, r2 - 1e-4, 1.0, 1.5])),
         }
         for case_name, (z, A, b) in cases.items():
             reference = LTIVer1Solver(z, A, b, max_iter=20000).solve().projection
@@ -736,14 +743,14 @@ class LTISolverRegressionTests(unittest.TestCase):
         np.testing.assert_allclose(result.projection / scale, dykstra / scale, rtol=0.0, atol=1e-12)
 
     def test_modal_scan_keeps_a_draining_row_watched_at_any_scale(self) -> None:
-        # No normal touches the third coordinate, so the episode with all three rows
-        # active is deflated and, with the certificate set aside, scanned modally; row 2
-        # drains by 0.29 * scale per cycle and Dykstra drops it on cycle 7. A drain
-        # tolerance fixed at 1e-9 cleared it at small scales and jumped the budget with
-        # it still active
+        # Only row 3, which never activates, touches the third coordinate, so the episode
+        # with rows 0 to 2 active is deflated and, with the certificate set aside, scanned
+        # modally. Row 2 drains by 0.29 * scale per cycle and Dykstra drops it on cycle 7.
+        # A drain tolerance fixed at 1e-9 cleared it at small scales and jumped the budget
+        # with it still active
         z = np.array([1.0, -1.5, 0.0])
-        A = np.array([[1.5, -1.0, 0.0], [-0.5, 1.0, 0.0], [0.5, 0.5, 0.0]])
-        b = np.array([-0.5, -2.0, -2.0])
+        A = np.array([[1.5, -1.0, 0.0], [-0.5, 1.0, 0.0], [0.5, 0.5, 0.0], [0.0, 0.0, 1.0]])
+        b = np.array([-0.5, -2.0, -2.0, 1.0])
         for scale in (1.0, 1e-9, 1e-12):
             with self.subTest(scale=scale):
                 dykstra = DykstraProjectionSolver(scale * z, A, scale * b, max_iter=20).solve()
@@ -806,18 +813,20 @@ class LTISolverRegressionTests(unittest.TestCase):
                                                    rtol=0.0, atol=1e-12)
 
     def test_deflated_episode_stays_on_the_dykstra_path_when_the_resolvent_is_ill_conditioned(self) -> None:
-        # Rows 0 and 1 are 4.4e-4 rad apart and the last coordinate is free, so the
-        # episode of rows 0, 1 and 3 is deflated with cond(I - A_m + P_1) about 1.2e7;
-        # it cannot be certified, scans one cycle and switches on cycle 4, and an
-        # explicit inverse moves the state it switches from by about 1e-9
+        # Rows 0 and 1 are 4.4e-4 rad apart and only row 4, which never activates,
+        # touches the last coordinate, so the episode of rows 0, 1 and 3 is deflated with
+        # cond(I - A_m + P_1) about 1.2e7. It cannot be certified, scans one cycle and
+        # switches on cycle 4, and an explicit inverse moves the state it switches from
+        # by about 1e-9
         z = np.array([-6.0, 0.0, 37.0, -33.0])
         A = np.array([
             [2.269, 1.999, 0.634, 0.0],
             [2.267, 1.999, 0.634, 0.0],
             [-0.997, 1.345, -0.725, 0.0],
             [-0.222, -1.105, 0.245, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
         ])
-        b = np.array([23.01, 23.0, -12.42, 2.96])
+        b = np.array([23.01, 23.0, -12.42, 2.96, 0.0])
         dykstra = DykstraProjectionSolver(z, A, b, max_iter=5).solve()
 
         result = LTIVer5Solver(z, A, b, max_iter=5).solve()
@@ -934,12 +943,14 @@ class LTISolverRegressionTests(unittest.TestCase):
                                            rtol=0.0, atol=1e-9)
 
     def test_idle_member_of_an_equality_does_not_end_a_modal_scan(self) -> None:
-        # Rows 2 and 3 are one equality; the active normals lie in the first two
-        # coordinates, so Ver5 scans the episode in its deflated modal form, where the
-        # idle member's slack of a few ulps once predicted a switch on every cycle
+        # Rows 2 and 3 are one equality. The active normals lie in the first two
+        # coordinates and only row 4, which never activates, touches the third, so Ver5
+        # scans the episode in its deflated modal form, where the idle member's slack of a
+        # few ulps once predicted a switch on every cycle
         z = np.array([-1.3, -2.0, 0.0])
-        A = np.array([[-0.9, -0.5, 0.0], [0.2, -1.9, 0.0], [-0.4, 1.7, 0.0], [0.4, -1.7, 0.0]])
-        b = np.array([0.5, 2.1, -2.1, 2.1])
+        A = np.array([[-0.9, -0.5, 0.0], [0.2, -1.9, 0.0], [-0.4, 1.7, 0.0], [0.4, -1.7, 0.0],
+                      [0.0, 0.0, 1.0]])
+        b = np.array([0.5, 2.1, -2.1, 2.1, 1.0])
         dykstra = DykstraProjectionSolver(z, A, b, max_iter=20).solve().projection
         solver = LTIVer5Solver(z, A, b, max_iter=20)
         exact_cycles = spy_exact_cycles(solver)
@@ -1084,13 +1095,14 @@ class LTISolverRegressionTests(unittest.TestCase):
                     np.testing.assert_allclose(result.projection, solver.actual_projection, rtol=0.0, atol=1e-9)
 
     def test_stall_jump_leaves_a_drained_auxiliary_to_the_exact_cycle(self) -> None:
-        # Row 0's auxiliary drains to exactly 0 on cycle 65 with the state frozen; Dykstra
+        # Row 0's auxiliary drains to exactly 0 on cycle 65 with the state frozen. Dykstra
         # drops the row there, but the stepped prediction keeps it active at zero, and a
         # crossing search that only looked at positive auxiliaries jumped on with it still
-        # active, past cycle 66, where Dykstra's state moves
+        # active, past cycle 66, where Dykstra's state moves. Only row 3, which never
+        # activates, touches the third coordinate, so the episodes are singular
         z = np.array([33.0, 0.0, 0.0])
-        A = np.array([[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
-        b = np.array([1.0, 0.875, 0.5])
+        A = np.array([[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+        b = np.array([1.0, 0.875, 0.5, 1.0])
         dykstra = DykstraProjectionSolver(z, A, b, max_iter=100, plot_errors=True).solve()
         for solver_type in (LTIVer4Solver, LTIVer5Solver):
             with self.subTest(solver=solver_type.__name__):
@@ -1179,15 +1191,16 @@ class LTISolverRegressionTests(unittest.TestCase):
                                            rtol=0.0, atol=1e-12)
 
     def test_modal_scan_is_not_forced_into_exact_cycles_by_a_duplicated_half_space(self) -> None:
-        # With the certificate set aside the episode is scanned in modal form, and a slack
-        # floor built from the modal coefficients of the idle copy's cancelled row of R
-        # let noise predict a reactivation on every cycle
+        # Only row 3, which never activates, touches the third coordinate, so with the
+        # certificate set aside the episode is scanned in modal form, and a slack floor
+        # built from the modal coefficients of the idle copy's cancelled row of R let
+        # noise predict a reactivation on every cycle
         a = np.array([1.0, 2.0, 0.0]) / np.sqrt(5.0)
         turned = np.array([np.cos(0.05) * a[0] - np.sin(0.05) * a[1],
                            np.sin(0.05) * a[0] + np.cos(0.05) * a[1], 0.0])
         z = a + turned + np.array([0.0, 0.0, 5.0])
-        A = np.array([a, a, turned])
-        b = np.zeros(3)
+        A = np.array([a, a, turned, [0.0, 0.0, 1.0]])
+        b = np.array([0.0, 0.0, 0.0, 6.0])
         dykstra = DykstraProjectionSolver(z, A, b, max_iter=1000).solve().projection
         solver = LTIVer5Solver(z, A, b, max_iter=1000)
         exact_cycles = spy_exact_cycles(solver)
@@ -1247,19 +1260,20 @@ class LTISolverRegressionTests(unittest.TestCase):
                                            dykstra.errors_for_plotting[:end - 1], rtol=0.0, atol=1e-13)
 
     def test_modal_scan_does_not_deactivate_an_idle_equality_member_on_noise(self) -> None:
-        # Rows 2 and 3 are one equality and no row touches the fourth coordinate, so the
-        # episodes are singular and, with the certificate set aside, scanned in modal
-        # form; extrapolated rounding on the idle member's auxiliary predicted a
-        # deactivation every few cycles, although beyond rounding Dykstra's active set
-        # changes only on cycles 1, 27 and 78
+        # Rows 2 and 3 are one equality and only row 5, which never activates, touches
+        # the fourth coordinate, so the episodes are singular and, with the certificate
+        # set aside, scanned in modal form. Extrapolated rounding on the idle member's
+        # auxiliary predicted a deactivation every few cycles, although beyond rounding
+        # Dykstra's active set changes only on cycles 1, 27 and 78
         z = np.array([-3.6529827615285546, 3.3126824887562547, -7.651149264010826, -5.105167330200679])
         A = np.array([[-1.497852906366799, 1.7167847883737464, -0.10525262424400268, 0.0],
                       [0.12352979103860766, 0.11445557886335492, -0.31756464855181005, 0.0],
                       [-0.3529758312961161, -1.2871889808807873, 0.08561175478683569, 0.0],
                       [0.3529758312961161, 1.2871889808807873, -0.08561175478683569, 0.0],
-                      [-1.361837430913596, -1.4141450630731343, 0.2556685680932052, 0.0]])
+                      [-1.361837430913596, -1.4141450630731343, 0.2556685680932052, 0.0],
+                      [0.0, 0.0, 0.0, 1.0]])
         b = np.array([4.068245616354629, 0.43479756153641425, -1.1813464847881878, 1.1813464847881878,
-                      -0.6166914151530024])
+                      -0.6166914151530024, 0.0])
         dykstra = DykstraProjectionSolver(z, A, b, max_iter=300).solve().projection
         solver = LTIVer5Solver(z, A, b, max_iter=300)
         exact_cycles = spy_exact_cycles(solver)
@@ -1269,12 +1283,12 @@ class LTISolverRegressionTests(unittest.TestCase):
         np.testing.assert_allclose(result.projection, dykstra, rtol=0.0, atol=1e-12)
 
     def test_modal_scan_drops_a_real_drain_where_dykstra_does(self) -> None:
-        # No row touches the third coordinate, so the episode is scanned in modal form;
-        # row 1 drains at five times the rounding of its drift, and allowing that
-        # rounding t times moved its switch from cycle 183 to 229
+        # Only row 3, which never activates, touches the third coordinate, so the episode
+        # is scanned in modal form. Row 1 drains at five times the rounding of its drift,
+        # and allowing that rounding t times moved its switch from cycle 183 to 229
         z = np.array([1.0 + 9e-11, 1.0 + 3e-11, 4.0])
-        A = np.array([[1.0, 0.0, 0.0], [0.3, 1.0, 0.0], [1.0, 1.0, 0.0]])
-        b = np.array([1.0, 1.3, 2.0 - 3e-13])
+        A = np.array([[1.0, 0.0, 0.0], [0.3, 1.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        b = np.array([1.0, 1.3, 2.0 - 3e-13, 5.0])
         dykstra = DykstraProjectionSolver(z, A, b, max_iter=300, plot_errors=True).solve()
         solver = LTIVer5Solver(z, A, b, max_iter=300, plot_errors=True)
         with mock.patch.object(lti_solver, "kkt_certificate", return_value=None):
