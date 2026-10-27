@@ -9,8 +9,10 @@ visit's output lies in its own half-space to within rounding.
 """
 
 import contextlib
+import hashlib
 import io
 from pathlib import Path
+import platform
 import re
 import sys
 import tempfile
@@ -698,6 +700,142 @@ class ExportRoundTripTests(unittest.TestCase):
                                       ("errors_for_plotting", result.errors_for_plotting),
                                       ("active_halfspaces", result.active_half_spaces)):
                     np.testing.assert_array_equal(loaded[key], expected, err_msg=key)
+
+
+# SHA-256 digests of every output the three solvers gave on bitwise_battery(), recorded from
+# the solvers that normalised each row at every visit and tested activity whether or not it was
+# plotted
+BITWISE_FIXTURE = Path(__file__).resolve().parent / "core_solver_reference.npz"
+RESULT_FIELDS = ("projection", "path", "squared_errors", "stalled_errors", "converged_errors",
+                 "errors_for_plotting", "active_half_spaces")
+BITWISE_FIELDS = RESULT_FIELDS + ("corrections", "log")
+# The outputs a solve has whichever tracking flags are set
+UNTRACKED_FIELDS = ("projection", "path", "corrections", "log")
+TRACKING_FLAGS = dict(track_error=True, plot_errors=True, plot_active_halfspaces=True)
+
+# Dimensions, half-spaces, seed and cycle budget of the random problems of bitwise_battery(),
+# then the problems of STALLING_CASES, on which the stall detection solver jumps
+BITWISE_CASES = (
+    (2, 3, 7000, 80), (2, 7, 7001, 80), (2, 13, 7002, 80), (3, 4, 7003, 80),
+    (3, 9, 7004, 80), (4, 8, 7005, 80), (4, 18, 7006, 80), (5, 6, 7007, 80),
+    (6, 20, 7008, 80), (8, 9, 7009, 80), (8, 24, 7010, 80), (10, 33, 7011, 50),
+    (12, 40, 7012, 50), (16, 17, 7013, 50), (16, 48, 7014, 50), (20, 64, 7015, 30),
+    (24, 30, 7016, 30), (32, 33, 7017, 30), (32, 64, 7018, 30),
+) + tuple((dimensions, num_planes, seed, 80) for dimensions, num_planes, seed in STALLING_CASES)
+
+# The factors by which bitwise_battery() multiplies z and b of its rescaled problems, in turn
+BITWISE_SCALES = (1e-3, 3.7e2, 6.1e5)
+
+
+def numeric_platform() -> str:
+    """The operating system, processor, numpy version and BLAS library, which together decide
+    how numpy's products round."""
+    blas = np.show_config(mode="dicts")["Build Dependencies"]["blas"]["name"]
+    return f"{platform.system()} {platform.machine()}, numpy {np.__version__}, {blas}"
+
+
+def array_digest(array) -> bytes:
+    """SHA-256 digest of an array's dtype, shape and bytes, or of None."""
+    if array is None:
+        return hashlib.sha256(b"None").digest()
+    array = np.ascontiguousarray(array)
+    return hashlib.sha256(f"{array.dtype.str} {array.shape} ".encode() + array.tobytes()).digest()
+
+
+def problem_digest(z, A, b, max_iter) -> bytes:
+    return hashlib.sha256(array_digest(z) + array_digest(A) + array_digest(b)
+                          + str(max_iter).encode()).digest()
+
+
+def output_digests(solver_type, z, A, b, max_iter, **options) -> dict:
+    """Digests of the outputs named in BITWISE_FIELDS of one solve.
+
+    The corrections are the correction vectors after the last cycle, for the hybrid its
+    Dykstra set, and the log is what the solver printed, which names every fast-forward.
+    """
+    log = io.StringIO()
+    with contextlib.redirect_stdout(log):
+        solver = solver_type(z, A, b, max_iter, **options)
+        result = solver.solve()
+    digests = {field: array_digest(getattr(result, field)) for field in RESULT_FIELDS}
+    digests["corrections"] = array_digest(np.array(getattr(solver, "e_dykstra", solver.e)))
+    digests["log"] = hashlib.sha256(log.getvalue().encode()).digest()
+    return digests
+
+
+def bitwise_battery() -> list:
+    """The problems of BitwiseReferenceTests, as (z, A, b, max_iter).
+
+    They are the random problems of BITWISE_CASES and the box and line from both starts of
+    BOX_LINE_STALLS over 30 cycles, the problem of paper_figure.py among them. Each comes again
+    rescaled, with z and b multiplied by the next of BITWISE_SCALES, and for a random problem
+    every row of A and b multiplied by a factor of its own between 1e-2 and 1e2. The box and
+    line keeps its rows, because its line is a pair of opposite half-spaces, which rows rounded
+    apart would leave without a common point.
+    """
+    problems = [random_case(dimensions, num_planes, seed)[:3] + (cycles,)
+                for dimensions, num_planes, seed, cycles in BITWISE_CASES]
+    problems += [(np.array(start), BOX_LINE_A, BOX_LINE_B, 30) for start in BOX_LINE_STALLS]
+    rng = np.random.default_rng(7100)
+    rescaled = []
+    for index, (z, A, b, max_iter) in enumerate(problems):
+        scale = BITWISE_SCALES[index % len(BITWISE_SCALES)]
+        rows = (10.0 ** rng.uniform(-2.0, 2.0, size=b.size) if index < len(BITWISE_CASES)
+                else np.ones(b.size))
+        rescaled.append((scale * z, rows[:, None] * A, scale * rows * b, max_iter))
+    return problems + rescaled
+
+
+class BitwiseReferenceTests(unittest.TestCase):
+    """Every output of the three solvers on bitwise_battery() is bitwise the one recorded in
+    BITWISE_FIXTURE.
+
+    Normalising each row once per solver, and testing activity only for a plotted record,
+    changed how often the work is done and not its arithmetic. Another processor, numpy or
+    BLAS library rounds the products differently, hence there the comparison is skipped.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        with np.load(BITWISE_FIXTURE) as fixture:
+            cls.fixture = {key: fixture[key] for key in fixture.files}
+        cls.problems = bitwise_battery()
+
+    def setUp(self) -> None:
+        recorded = str(self.fixture["platform"])
+        if recorded != numeric_platform():
+            self.skipTest(f"the fixture was recorded on {recorded}, not {numeric_platform()}")
+
+    def assert_outputs_are_recorded(self, fields, **options) -> None:
+        """Solves every problem with every solver and lists each of the fields whose digest
+        differs from the fixture's."""
+        recorded = self.fixture["output_digests"]
+        mismatches = []
+        for case, (z, A, b, max_iter) in enumerate(self.problems):
+            for column, solver_type in enumerate(SOLVERS):
+                digests = output_digests(solver_type, z, A, b, max_iter, **options)
+                mismatches += [
+                    f"problem {case}, {solver_type.__name__}, {field}" for field in fields
+                    if digests[field] != recorded[case, column, BITWISE_FIELDS.index(field)].tobytes()
+                ]
+        self.assertEqual(mismatches, [])
+
+    def test_the_battery_is_the_recorded_one(self) -> None:
+        """The fixture applies only to the same problems and fields, and its problems make the
+        stall detection solver fast-forward."""
+        self.assertEqual(tuple(self.fixture["fields"]), BITWISE_FIELDS)
+        digests = [np.frombuffer(problem_digest(*problem), dtype=np.uint8)
+                   for problem in self.problems]
+        np.testing.assert_array_equal(np.array(digests), self.fixture["problem_digests"])
+        self.assertGreater(np.count_nonzero(self.fixture["fast_forwards"]), 0)
+
+    def test_every_tracked_output_is_bitwise_the_recorded_one(self) -> None:
+        self.assert_outputs_are_recorded(BITWISE_FIELDS, **TRACKING_FLAGS)
+
+    def test_an_untracked_solve_is_bitwise_the_recorded_one(self) -> None:
+        """Without the tracking flags the iteration, its corrections and its fast-forwards are
+        still the recorded ones."""
+        self.assert_outputs_are_recorded(UNTRACKED_FIELDS)
 
 
 if __name__ == "__main__":
