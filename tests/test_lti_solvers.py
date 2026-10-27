@@ -1569,5 +1569,36 @@ class LTIOverheadTests(unittest.TestCase):
                 np.testing.assert_array_equal(result.path, reference.path)
                 np.testing.assert_array_equal(result.squared_errors, reference.squared_errors)
 
+    def test_replay_writes_the_rows_of_a_loop_over_every_half_space(self) -> None:
+        # The loop over every half-space that _record_cycle ran before is the reference.
+        # Seed 0 skips 169 cycles in an envelope jump before cycle 310 certifies
+        def reference(solver, cycle):
+            active = solver.cmap.active
+            x = solver.x_historical[cycle - 1][-1].copy()
+            y = np.where(active, solver._recorded_y, 0.0)
+            for m in range(solver.n):
+                if active[m]:
+                    slack = float(solver.unit_A[m] @ x) - solver.unit_b[m]
+                    x = x - slack * solver.unit_A[m]
+                    y[m] += slack
+                solver.x_historical[cycle][m] = x
+            solver._recorded_y = y
+            state, solver.x = solver.x, x
+            try:
+                solver._track_error(cycle)
+            finally:
+                solver.x = state
+            solver._record_activity(cycle, active)
+
+        for seed, budget in ((3, 6), (3, 11), (3, 64), (0, 200), (0, 400)):
+            z, A, b = timing_problem(seed)
+            with self.subTest(seed=seed, budget=budget):
+                with mock.patch.object(LTIVer5Solver, "_record_cycle", reference):
+                    expected = LTIVer5Solver(z, A, b, budget, track_error=True, dimensions=8).solve()
+                result = LTIVer5Solver(z, A, b, budget, track_error=True, dimensions=8).solve()
+                np.testing.assert_array_equal(result.path, expected.path)
+                np.testing.assert_array_equal(result.squared_errors, expected.squared_errors)
+
+
 if __name__ == "__main__":
     unittest.main()
