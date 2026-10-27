@@ -184,7 +184,9 @@ class ConvexProjectionSolver(ABC):
         """
         if dimensions is not None and dimensions != point.size:
             raise ValueError("dimensions must match the dimension of point.")
-        if A.shape[0] == 0:
+        # quadprog rounds every coordinate in its unconstrained step. A feasible point is
+        # therefore returned as itself.
+        if np.all((A * point).sum(axis=1) <= b):
             return point.copy()
 
         identity = np.eye(point.size)
