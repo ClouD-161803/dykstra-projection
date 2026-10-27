@@ -891,5 +891,18 @@ class CostModelTests(unittest.TestCase):
         self.assertAlmostEqual(values["c_speedup"], 2.2)
 
 
+
+@unittest.skipUnless(c_solvers.libraries_built(), "build the C solvers first, see the README")
+class CValidationSettleCycleTests(unittest.TestCase):
+    def test_a_settlement_at_a_final_active_set_counts_as_agreeing(self) -> None:
+        # Problem 6 of the 20 x 6 tier settles at cycle 49 at a final active set in both
+        # implementations, where the C counts cycle 49 itself, and c_validation.compare read the
+        # C's cycles plus one as its settle cycle and reported a disagreement
+        A, b, z = problem_generators.problem(20, 6, problem_generators.problem_seed(20, 6))
+        for budget in (200, 2000):
+            with self.subTest(budget=budget):
+                self.assertTrue(c_validation.compare(z, A, b, budget)["settled cycles agree"])
+
+
 if __name__ == "__main__":
     unittest.main()
