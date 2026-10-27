@@ -1,6 +1,7 @@
 """Reproduce the square-and-line stalling example of the SIAM paper's Stalling section.
 
-Run from this folder with `python square_line_example.py`. The square [-1, 1]^2 is four
+Run from this folder with `python square_line_example.py`, or with `--quick`
+to write into a temporary directory, since the example takes well under a second. The square [-1, 1]^2 is four
 half-spaces, right, left, top and bottom, and the line through (0, 1) and (2, 0) is two
 opposite half-spaces, below and above it. The script prints, and writes to
 results/paper/tab-square-line.tex, the stalling state after the first cycle from
@@ -10,13 +11,17 @@ stall in the order that visits the line first, and what the accelerated solver d
 and without its KKT test. Every count from the theorem is checked against plain Dykstra.
 """
 
+import argparse
 import math
+import tempfile
+import time
 from contextlib import contextmanager
 from fractions import Fraction
 
 import numpy as np
 
 import lti_solver
+import paper_figures
 from convex_projection_solver import ConvexProjectionSolver
 from lti_numerics import exact_cycle, unit_constraints
 from lti_solver import LTIVer5Solver
@@ -340,5 +345,19 @@ def run() -> dict:
     return results
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Parse the command line and run."""
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--quick", action="store_true",
+                        help="the same example written to a temporary directory")
+    args = parser.parse_args()
+    began = time.perf_counter()
+    if args.quick:
+        paper_figures.OUTPUT_DIR = tempfile.mkdtemp(prefix="square_line_example_")
     run()
+    print(f"Finished in {time.perf_counter() - began:.1f} s: tab-square-line.tex in "
+          f"{paper_figures.OUTPUT_DIR}")
+
+
+if __name__ == "__main__":
+    main()
