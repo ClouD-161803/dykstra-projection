@@ -1349,5 +1349,86 @@ class OracleComparisonTests(unittest.TestCase):
             self.assertAlmostEqual(total[name], value)
 
 
+class CertifiedTimingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.addCleanup(setattr, performance_timing, "REPEATS", performance_timing.REPEATS)
+        performance_timing.REPEATS = 1
+
+    def test_the_certified_column_is_timed_at_its_settle_cycle_plus_one(self) -> None:
+        # problem 9 of 12 x 4 settles at cycle 24, far below CAP
+        spec = performance_timing.dense_problems(((12, 4),), 10)[9]
+        A, b, z = performance_timing.problem_data(spec)
+        within_cap = LTIVer5Solver(z, A, b, performance_timing.CAP).solve()
+        self.assertEqual(within_cap.certificate, "kkt")
+        implementations = ("python", "c") if c_solvers.libraries_built() else ("python",)
+        budgets = []
+        median_seconds = performance_timing.median_seconds
+
+        def recorded(implementation, solver, z, A, b, budget, schedule):
+            budgets.append(budget)
+            return median_seconds(implementation, solver, z, A, b, budget, schedule)
+
+        performance_timing.median_seconds = recorded
+        try:
+            records = performance_timing.measure_problem(spec, implementations)
+        finally:
+            performance_timing.median_seconds = median_seconds
+        # measure_problem times the columns in the order of SOLVERS, in each implementation
+        columns = [name for _ in implementations for name, _, _, _ in performance_timing.SOLVERS]
+        self.assertEqual(len(budgets), len(columns))
+        self.assertEqual([budget for name, budget in zip(columns, budgets)
+                          if name == "accelerated, certified"],
+                         [within_cap.settled_at + 1] * len(implementations))
+        for record in records:
+            with self.subTest(implementation=record["implementation"]):
+                self.assertTrue(record["accelerated, certified reached"])
+                self.assertEqual(record["accelerated, certified cycles"], within_cap.settled_at)
+
+    @unittest.skipUnless(c_solvers.libraries_built(), "needs the C solvers: make -C C")
+    def test_the_c_certified_column_does_not_depend_on_where_the_python_settles(self) -> None:
+        # under the schedule doubling, problem 1 of 160 x 48 settles in C at cycle 5649 and not in
+        # Python within CAP. a Python solver that never settles stands in for that disagreement
+        class NeverSettles(LTIVer5Solver):
+            def __init__(self, *args, **kwargs):
+                kwargs["schedule"] = "never"
+                super().__init__(*args, **kwargs)
+
+        spec = performance_timing.dense_problems(((12, 4),), 10)[9]
+        A, b, z = performance_timing.problem_data(spec)
+        in_c = c_solvers.accelerated_c_projection(z, A, b, performance_timing.CAP)
+        self.assertTrue(in_c.settled)
+        performance_timing.LTIVer5Solver = NeverSettles
+        try:
+            record, = performance_timing.measure_problem(spec, ("c",))
+        finally:
+            performance_timing.LTIVer5Solver = LTIVer5Solver
+        self.assertTrue(record["accelerated, certified reached"])
+        self.assertEqual(record["accelerated, certified cycles"], in_c.settled_at)
+
+    def test_a_run_of_one_implementation_keeps_the_records_of_the_other(self) -> None:
+        def lines_of(text: str, implementation: str) -> list[str]:
+            lines = text.splitlines()
+            column = next(csv.reader(lines[:1])).index("implementation")
+            return [line for line in lines[1:] if next(csv.reader([line]))[column] == implementation]
+
+        specs = performance_timing.dense_problems(((12, 4),), 2)
+        with redirected_output() as directory, redirect_stdout(io.StringIO()):
+            python = performance_timing.measure(specs, ("python",))
+            # a run of both implementations writes each C record before the Python record of its
+            # problem, and only the C records count exact and skipped cycles. relabelled Python
+            # records stand in for the C records, so that the test does not need the C solvers
+            c = [dict(record, implementation="c",
+                      **{"accelerated exact cycles": 1, "accelerated cycles skipped": 0})
+                 for record in python]
+            performance_timing.write_records([r for pair in zip(c, python) for r in pair],
+                                             "performance_timing")
+            before = (directory / "performance_timing.csv").read_text(encoding="utf-8")
+            performance_timing.measure(specs, ("python",))
+            after = (directory / "performance_timing.csv").read_text(encoding="utf-8")
+        self.assertEqual(lines_of(after, "c"), lines_of(before, "c"))
+        self.assertEqual(after.splitlines()[0], before.splitlines()[0])
+        self.assertEqual(len(lines_of(after, "python")), len(specs))
+
+
 if __name__ == "__main__":
     unittest.main()
