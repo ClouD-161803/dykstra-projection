@@ -173,6 +173,18 @@ class CSolverTests(unittest.TestCase):
                                            DykstraProjectionSolver(z, A, b, max_iter=1).actual_projection,
                                            rtol=0.0, atol=1e-12)
 
+    def test_no_constraints_settle_after_no_cycle(self) -> None:
+        # Without constraints z is its own projection, which both C solvers report as
+        # settled after no cycle. With no budget the call never reached them and came
+        # back unsettled
+        z = np.array([1.0, 2.0])
+        for solve in (accelerated_c_projection, dykstra_c_projection):
+            for max_iter in (0, 5):
+                with self.subTest(solver=solve.__name__, max_iter=max_iter):
+                    result = solve(z, np.zeros((0, 2)), np.zeros(0), max_iter)
+                    self.assertEqual((result.settled, result.cycles), (True, 0))
+                    np.testing.assert_array_equal(result.projection, z)
+
     def test_certificate_accepts_a_tight_row_without_a_multiplier(self) -> None:
         # Rows 1, 4 and 5 are tight at the projection, and row 4, the only one of them
         # that touches the second coordinate, carries no multiplier, so the step there is

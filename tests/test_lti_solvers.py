@@ -1481,6 +1481,16 @@ class LTISolverRegressionTests(unittest.TestCase):
             gram = (N[:, None, :] * N[None, :, :]).sum(axis=2)
             nonnegative_quadratic(gram, (N * z).sum(axis=1) - np.append(np.ones(32), 10.0 / np.sqrt(32.0)))
 
+    def test_ver5_certifies_the_start_without_constraints_at_cycle_0(self) -> None:
+        # With no constraints z is its own projection, which the C solver reports as
+        # settled after no cycle, while deflated_modal returned it without a certificate
+        z = np.array([1.0, 2.0])
+        for max_iter in (0, 5):
+            with self.subTest(max_iter=max_iter):
+                result = LTIVer5Solver(z, np.empty((0, 2)), np.empty(0), max_iter=max_iter).solve()
+                self.assertEqual((result.settled_at, result.certificate), (0, "kkt"))
+                np.testing.assert_array_equal(result.projection, z)
+
     def test_untouched_coordinate_does_not_change_the_settlement(self) -> None:
         # Every episode of this problem is regular in the plane. A coordinate no constraint
         # touches once made I - A_m singular, so the closed_form to frozen_stall presets
