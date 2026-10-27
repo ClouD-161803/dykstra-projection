@@ -696,6 +696,9 @@ class StallStudyOutputTests(unittest.TestCase):
         self.assertEqual(numbers["spanning_relative"], numbers["stalled_relative"])
 
 
+from dykstra.performance_timing import read_records
+
+
 class WedgeFamilyTests(unittest.TestCase):
     def test_a_wedge_problem_is_the_sweep_s_wedge_and_canonical_start_from_one_stream(self) -> None:
         for theta, p in benchmark.WEDGE_TIERS:
@@ -768,6 +771,52 @@ class BoxSlabFamilyTests(unittest.TestCase):
             problem_generators.BoxSlabTestPlanes(1)
         with self.assertRaises(ValueError):
             problem_generators.WedgeTestPlanes(0.1, 1)
+
+
+class BenchmarkFamilyTests(unittest.TestCase):
+    def test_the_families_have_the_tiers_of_the_paper_and_distinct_seeds(self) -> None:
+        self.assertEqual(len(benchmark.WEDGE_TIERS) * benchmark.SEEDS, 30)
+        self.assertEqual(len(benchmark.STALL_TIERS) * benchmark.SEEDS, 15)
+        self.assertEqual({p for _, p in benchmark.WEDGE_TIERS}, {3, 8})
+        seeds = [benchmark.family_problem(family, tier, index)[3]
+                 for family, tiers in benchmark.FAMILY_TIERS.items() for tier in tiers
+                 for index in range(benchmark.SEEDS)]
+        self.assertEqual(len(seeds), len(set(seeds)))
+
+
+@unittest.skipUnless(HAS_QPSOLVERS and HAS_SCIPY, BENCHMARK_GROUP)
+@unittest.skipUnless(c_solvers.libraries_built(), "needs the C solvers: make -C C")
+class BenchmarkFamilyRunTests(unittest.TestCase):
+    def test_reduced_runs_solve_every_family_and_the_tables_rebuild_from_the_csv(self) -> None:
+        header = ["header line"]
+        with redirected_output() as directory, redirect_stdout(io.StringIO()):
+            by_family = {family: benchmark.benchmark(benchmark.FAMILY_TIERS[family][:1], 1,
+                                                     family=family)
+                         for family in benchmark.FAMILY_TIERS}
+            for family, records in by_family.items():
+                benchmark.write_records(records, benchmark.output_names(family)["csv"])
+                benchmark.write_tables(records, family, header, "command")
+            benchmark.write_combined(by_family, header, "command")
+            written = {path.name for path in directory.iterdir()}
+            combined = (directory / "tab-benchmark.tex").read_text()
+            rebuilt = {family: read_records(str(directory / f"{names['csv']}.csv"))
+                       for family in by_family
+                       for names in [benchmark.output_names(family)]}
+        for family in by_family:
+            names = benchmark.output_names(family)
+            self.assertTrue({f"{names['csv']}.csv"} | {f"{names[kind]}.tex" for kind in
+                                                      ("tiers", "profiles", "headline")} <= written)
+            self.assertIn(f"{{{family} ($1$)}}", combined)
+            for record in by_family[family]:
+                if record["solver"] in ("accelerated", "Dykstra"):
+                    with self.subTest(family=family, solver=record["solver"]):
+                        self.assertTrue(record["solved"])
+                        self.assertLess(record["primal residual"], 1e-10)
+                        self.assertLess(record["projection error"], 1e-9)
+            for table in (benchmark.tiers_table,
+                          lambda records: benchmark.profiles_table(records, benchmark.QP_SOLVERS)):
+                self.assertEqual(table(rebuilt[family]), table(by_family[family]))
+        self.assertIn(r"{l cc|cc|cc}", combined)
 
 
 if __name__ == "__main__":
