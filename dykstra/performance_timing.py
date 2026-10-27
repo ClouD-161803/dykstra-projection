@@ -17,13 +17,16 @@ distance of the quadprog projection is read off the error history the Python sol
 track, which gives the first crossing even where the error is not monotone. The
 accelerated solver follows Dykstra's path until it settles, hence its first cycle is
 Dykstra's or its settlement, whichever is earlier. Each solver is then timed on a fresh run
-cut at that cycle, and the certified column times the accelerated solver run until it
-settles, all under a budget of CAP cycles. A problem that misses the tolerance or does not
-settle within CAP is counted at CAP cycles and the time of a CAP-cycle run. The C solvers are
-timed as whole calls. The Python solvers are timed in solve() alone, because their
-constructor runs the quadprog reference solve. Each time is the median of repeated runs,
-repeated until they total REPEAT_SECONDS or number REPEATS. Probes, the reference solve and
-the error checks are not timed.
+cut at that cycle. The certified column times the accelerated solver on a fresh run cut at its
+settle cycle plus one, which an untimed run of the same implementation within CAP cycles finds.
+After a settlement the Python solver writes the limit into every remaining row of its history,
+which is not the algorithm's work. The C solver returns at its settlement and does the same
+work under either budget. A problem that misses the tolerance or does not settle within CAP is
+counted at CAP cycles and the time of a CAP-cycle run. The C solvers are timed as whole calls.
+The Python solvers are timed in solve() alone, because their constructor runs the quadprog
+reference solve. Each time is the median of repeated runs, repeated until they total
+REPEAT_SECONDS or number REPEATS. Probes, the reference solve and the error checks are not
+timed.
 
 Every cell of a table reads the median over the problems of a tier and, in brackets, the
 first and third quartiles, interpolated linearly between the order statistics, and the scaling
@@ -158,7 +161,8 @@ def print_method(schedule: str = DEFAULT_SCHEDULE) -> None:
     for key, value in machine_description().items():
         print(f"{key}: {value}")
     print(f"method: first cycle within squared error {TOLERANCE:g} from the tracked history, "
-          f"budget cap {CAP} cycles, each time the median of runs repeated until they total "
+          f"budget cap {CAP} cycles, the certified run cut at the settle cycle plus one of an "
+          f"untimed run within the cap, each time the median of runs repeated until they total "
           f"{REPEAT_SECONDS} s or number {REPEATS}; C timed as whole calls, Python in solve() "
           f"alone; the accelerated solver tries the KKT test under the schedule {schedule}")
 
@@ -219,16 +223,21 @@ def median_seconds(implementation: str, solver: str, z: np.ndarray, A: np.ndarra
 
 def measure_problem(spec: Problem, implementations: tuple[str, ...],
                     schedule: str = DEFAULT_SCHEDULE) -> list[dict]:
-    """Probe and time one problem, one record per implementation asked for."""
+    """Probe and time one problem, one record per implementation asked for. The certified
+    column is timed at the settle cycle plus one of an untimed run of the same implementation
+    within CAP, and a timed run that does not settle on that cycle raises RuntimeError."""
     A, b, z = problem_data(spec)
     reference = ConvexProjectionSolver._find_optimal_solution(z, A, b)
     first_dykstra = cycles_to_tolerance(DykstraProjectionSolver, z, A, b, spec.num_dimensions)
     first_accelerated = cycles_to_tolerance(LTIVer5Solver, z, A, b, spec.num_dimensions,
                                             cap=first_dykstra or CAP, schedule=schedule)
-    budgets = {"Dykstra": first_dykstra or CAP, "accelerated": first_accelerated or CAP,
-               "accelerated, certified": CAP}
+    budgets = {"Dykstra": first_dykstra or CAP, "accelerated": first_accelerated or CAP}
     records = []
     for implementation in implementations:
+        # the two implementations can settle on different cycles, e.g. at a tie in the rounding
+        # floor of the finality test, hence each is cut after a settle cycle of its own
+        settle = timed_run(implementation, "accelerated", z, A, b, CAP, schedule)[2]
+        budgets["accelerated, certified"] = CAP if settle is None else settle + 1
         record = {"family": spec.family,
                   "tier": (f"{spec.num_planes}x{spec.num_dimensions}" if spec.family == "dense"
                            else f"p={spec.num_dimensions} theta={spec.theta:g}"),
@@ -241,6 +250,12 @@ def measure_problem(spec: Problem, implementations: tuple[str, ...],
             seconds, runs, point, settled, counters = median_seconds(
                 implementation, solver, z, A, b, budgets[name], schedule)
             if name == "accelerated, certified":
+                if settled != settle:
+                    raise RuntimeError(
+                        f"{record['tier']} index {spec.index}: the "
+                        f"{IMPLEMENTATION_NAMES[implementation]} accelerated solver settles at "
+                        f"cycle {settled} within {budgets[name]} cycles, and the untimed run "
+                        f"at cycle {settle} within {CAP}")
                 record[f"{name} reached"] = settled is not None
                 record[f"{name} cycles"] = settled if settled is not None else CAP
             else:
@@ -425,7 +440,9 @@ def performance_figure(summaries: dict, curves: dict, seeds: int) -> str:
 
 def measure(specs: list[Problem], implementations: tuple[str, ...],
             schedule: str = DEFAULT_SCHEDULE) -> list[dict]:
-    """Probe and time every problem, printing each as it finishes."""
+    """Probe and time every problem, printing each as it finishes, and return the records. The
+    records file of the family and schedule keeps the records of every other implementation it
+    holds, which --from-csv and --compare-schedules read beside the new ones."""
     records = []
     for spec in specs:
         started = time.perf_counter()
@@ -436,7 +453,11 @@ def measure(specs: list[Problem], implementations: tuple[str, ...],
             print(f"{record['tier']} index {spec.index}, {record['implementation']}: {cells} "
                   f"({time.perf_counter() - started:.1f} s)", flush=True)
     family = specs[0].family if specs else "dense"
-    write_records(records, output_name("performance_timing", family, schedule))
+    name = output_name("performance_timing", family, schedule)
+    path = os.path.join(paper_figures.OUTPUT_DIR, name + ".csv")
+    kept = ([r for r in read_records(path) if r["implementation"] not in implementations]
+            if os.path.exists(path) else [])
+    write_records(kept + records, name)
     return records
 
 
@@ -501,6 +522,9 @@ def report(records: list[dict], implementations: tuple[str, ...], command: str,
                   f"{'the wedge family' if family == 'wedge' else 'Generator 2'}, {seeds} problems "
                   f"per tier, budget cap {CAP} cycles, squared error {TOLERANCE:g}, KKT test "
                   f"schedule {schedule}\n"
+                  "% the certified column times a fresh run cut at the settle cycle plus one, which "
+                  f"an untimed run within the cap finds, or a run of {CAP} cycles for a problem "
+                  "that does not settle within the cap\n"
                   "% each cell reads the median over the problems of the tier and, in brackets, the "
                   "first and third quartiles, interpolated linearly between order statistics\n"
                   + reach_comment(summaries[implementation]))
