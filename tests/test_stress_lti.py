@@ -254,6 +254,31 @@ class StressTests(unittest.TestCase):
                         self.assertLess(time.perf_counter() - started, 5.0, label)
                         self.assert_on_contract(solver, result, dykstra, solver.actual_projection, budget, label)
 
+    def test_the_projection_dual_reaches_its_optimum_on_small_systems(self) -> None:
+        # The certificate's first candidate support comes from the dual of projecting z
+        # onto the candidate rows, whose Gram matrix is singular whenever there are more
+        # rows than dimensions, and its multipliers must give the projection itself
+        for index, (z, N, b, projection) in enumerate(small_systems(3000, 20261023)):
+            with self.subTest(system=index):
+                multipliers = nonnegative_quadratic(N @ N.T, N @ z - b)
+                self.assertTrue(np.all(multipliers >= 0.0))
+                np.testing.assert_allclose(z - N.T @ multipliers, projection, rtol=0.0,
+                                           atol=1e-9 * max(1.0, float(np.abs(z).max())))
+
+    def test_the_certificate_accepts_the_projection_given_its_support(self) -> None:
+        # With the rows tight at the projection as its active set and the projection as
+        # its hint, the KKT test has the true support among its candidates, and its
+        # rounding floors must let it pass, also where a tight row touches only
+        # coordinates the step does not move
+        for index, (z, N, b, projection) in enumerate(small_systems(6000, 20261024)):
+            with self.subTest(system=index):
+                scale = max(1.0, float(np.abs(z).max()))
+                tight = np.abs(N @ projection - b) <= 1e-9 * scale
+                certified = kkt_certificate(z, N, b, projection, tight)
+                self.assertIsNotNone(certified)
+                bound = 1e-9 * float(np.linalg.norm(z - projection)) + 1e-13 * scale
+                self.assertLessEqual(float(np.linalg.norm(certified[0] - projection)), bound)
+
 
 if __name__ == "__main__":
     unittest.main()
