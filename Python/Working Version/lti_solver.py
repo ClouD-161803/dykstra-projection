@@ -108,6 +108,10 @@ class LTISolver(ConvexProjectionSolver):
         # Track error and activity at the initial point
         self._track_error(0)
         self._track_activity(0)
+        if self.n == 0 and self._deflation:
+            # Without constraints z is its own projection, as the KKT test proves with no
+            # multipliers, and the C solver reports it as settled after no cycle as well
+            self.settled_at, self.certificate = 0, "kkt"
         if self.max_iter == 0:
             return self._format_output()
 

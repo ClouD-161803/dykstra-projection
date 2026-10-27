@@ -93,9 +93,11 @@ def _solve(name: str, z: np.ndarray, A: np.ndarray, b: np.ndarray,
         raise ValueError(f"max_iter must not exceed {MAX_CYCLES} for the C solvers.")
     n = A.shape[0]
 
-    # Zero cycles leave the point where it is, and the C code needs a budget of one
+    # Zero cycles leave the point where it is, and the C code needs a budget of one.
+    # Without constraints that point is its own projection, which the C code reports as
+    # settled after no cycle at any other budget
     if max_iter == 0:
-        return CSolverResult(z, False, 0, np.zeros(n))
+        return CSolverResult(z, n == 0, 0, np.zeros(n))
 
     function = _entry_point(name)
     info = _SOLVERS[name][1]()
