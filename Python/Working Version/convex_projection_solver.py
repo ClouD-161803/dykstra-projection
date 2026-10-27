@@ -364,11 +364,15 @@ class ConvexProjectionSolver(ABC):
     def _track_activity(self, cycle_index: int) -> None:
         """
         Track active half-spaces for the current cycle.
-        This should be called after all n half-spaces have been processed.
+        This should be called after all n half-spaces have been processed. It records
+        nothing unless plot_active_halfspaces is set, since only the result reads
+        active_half_spaces.
 
         Args:
             cycle_index: Index for storing activity data (0 for initial, 1 for first cycle, etc).
         """
+        if not self.plot_active_halfspaces:
+            return
         for m, (normal, offset) in enumerate(zip(self.A, self.b)):
             index = (m - self.n) % self.n
             if not self._is_in_half_space(self.x + self.e[index], normal, offset):
@@ -454,8 +458,6 @@ class DykstraProjectionSolver(ConvexProjectionSolver):
             for m, (unit_normal, constant_offset) in enumerate(self.unit_constraints):
                 index = (m - self.n) % self.n
                 x_temp = self.x.copy()
-
-                self._check_activity(m, i, x_temp, self.A[m], self.b[m], index)
 
                 # Update x_m+1
                 self.x = self._project_onto_unit_half_space(x_temp + self.e[index],
@@ -551,8 +553,6 @@ class DykstraMapHybridSolver(ConvexProjectionSolver):
             for m, (unit_normal, constant_offset) in enumerate(self.unit_constraints):
                 index = (m - self.n) % self.n
                 x_temp = self.x.copy()
-
-                self._check_activity(m, i, x_temp, self.A[m], self.b[m], index)
 
                 # Update x_m+1
                 self.x = self._project_onto_unit_half_space(x_temp + self.e[index],
@@ -701,7 +701,7 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
         # beyond rounding.
         for m, (normal, offset) in enumerate(zip(self.A, self.b)):
             self.e[m] = self.e[m] + n_fast_forward * (visits[m - 1] - visits[m])
-            if (not self._is_in_half_space(
+            if (self.plot_active_halfspaces and not self._is_in_half_space(
                     self.x + self.e[(m - self.n) % self.n], normal, offset)):
                 self.active_half_spaces[m][i] = 1
 
