@@ -151,3 +151,140 @@ def all_counts(after: np.ndarray, cycle1: np.ndarray, violated: np.ndarray) -> d
     counts["total_violated_start"] = alternative["total"]
     counts["per_half_space_violated_start"] = alternative["per_half_space"]
     return counts
+
+
+# Exact arithmetic
+
+def exact_cycle(x: tuple, y: tuple, normals: tuple, offsets: tuple) -> tuple:
+    """One Dykstra cycle in rationals, as lti_numerics.exact_cycle does in floating point.
+
+    Returns the point, the auxiliaries, and the activity of each visit.
+    """
+    x0, x1 = x
+    auxiliaries = list(y)
+    active = []
+    for i, ((u, v), offset) in enumerate(zip(normals, offsets)):
+        s0, s1 = x0 + auxiliaries[i] * u, x1 + auxiliaries[i] * v
+        slack = u * s0 + v * s1 - offset
+        if slack > 0:
+            x0, x1, auxiliaries[i] = s0 - slack * u, s1 - slack * v, slack
+        else:
+            x0, x1, auxiliaries[i] = s0, s1, Fraction(0)
+        active.append(slack > 0)
+    return (x0, x1), tuple(auxiliaries), tuple(active)
+
+
+def wedge_limits(normals, offsets, start, k: int) -> tuple:
+    """Multipliers of the vertex of the two half-spaces other than k, and the floor of k.
+
+    Works on Fractions and on floats alike, and returns (y_i, y_j, Gamma_k) with i < j.
+    """
+    i, j = (m for m in range(3) if m != k)
+    (ui, vi), (uj, vj), (uk, vk) = normals[i], normals[j], normals[k]
+    det = ui * vj - vi * uj
+    v0 = (offsets[i] * vj - offsets[j] * vi) / det
+    v1 = (ui * offsets[j] - uj * offsets[i]) / det
+    d0, d1 = start[0] - v0, start[1] - v1
+    return ((d0 * vj - d1 * uj) / det, (ui * d1 - vi * d0) / det,
+            uk * v0 + vk * v1 - offsets[k])
+
+
+def exact_run(normals: tuple, offsets: tuple, start: tuple, cycles: int = EXACT_CYCLES) -> dict:
+    """Run Dykstra exactly until its activity is certified final or for cycles cycles.
+
+    normals must be rational unit vectors, and ValueError is raised otherwise. Returns the
+    activity of every cycle, cycle 0 holding the rows the start violates, the changes after the
+    opening cycle, all six counts, the certificate ("fixed", "wedge", or None at the budget), and
+    the cycle it fired in.
+    """
+    if any(u * u + v * v != 1 for u, v in normals):
+        raise ValueError("the normals of an exact run must be unit vectors.")
+    x, y = tuple(start), (Fraction(0),) * 3
+    violated = tuple(u * x[0] + v * x[1] - b > 0 for (u, v), b in zip(normals, offsets))
+    activity, phase_start, certificate, cycle = [violated], 1, None, cycles
+    for t in range(1, cycles + 1):
+        x_new, y_new, active = exact_cycle(x, y, normals, offsets)
+        if t >= 2 and active != activity[-1]:
+            phase_start = t
+        activity.append(active)
+        if (x_new, y_new) == (x, y):
+            certificate, cycle = "fixed", t
+            break
+        x, y = x_new, y_new
+        if sum(active) == 2 and t - phase_start >= 2:
+            y_i, y_j, gamma = wedge_limits(normals, offsets, start, active.index(False))
+            if y_i > 0 and y_j > 0 and gamma < 0:
+                certificate, cycle = "wedge", t
+                break
+    record = np.array(activity)
+    after = (record[2:] != record[1:-1]).sum(axis=0)
+    counts = {name: int(value) for name, value in
+              all_counts(after, record[1], record[0]).items()}
+    return {"activity": activity, "after": after, "counts": counts, "certificate": certificate,
+            "cycle": cycle, "point": x, "auxiliaries": y}
+
+
+def activity_sequence(activity: list, half_space: int) -> str:
+    """Runs of constant activity of one half-space, e.g. "active 0-1, inactive 2-9"."""
+    values = [active[half_space] for active in activity]
+    runs, start = [], 0
+    for t in range(1, len(values) + 1):
+        if t == len(values) or values[t] != values[start]:
+            state = "active" if values[start] else "inactive"
+            runs.append(f"{state} {start}" if t - 1 == start else f"{state} {start}-{t - 1}")
+            start = t
+    return ", ".join(runs)
+
+
+def set_sequence(activity: list) -> str:
+    """Runs of a constant active set, e.g. "123 0-1, 23 2-9", with cycle 0 the rows z violates."""
+    names = ["".join(str(m + 1) for m in range(3) if active[m]) or "none" for active in activity]
+    runs, start = [], 0
+    for t in range(1, len(names) + 1):
+        if t == len(names) or names[t] != names[start]:
+            runs.append(f"{names[start]} {start}" if t - 1 == start
+                        else f"{names[start]} {start}-{t - 1}")
+            start = t
+    return ", ".join(runs)
+
+
+def exact_general_position(normals: tuple, offsets: tuple, start: tuple) -> bool:
+    """Whether an exact instance is in general position and its start lies outside."""
+    (u1, v1), (u2, v2), (u3, v3) = normals
+    w = (u2 * v3 - v2 * u3, u3 * v1 - v3 * u1, u1 * v2 - v1 * u2)
+    if any(weight == 0 for weight in w):
+        return False
+    D = sum(weight * b for weight, b in zip(w, offsets))
+    if D == 0:
+        return False
+    if all(weight > 0 for weight in w) and D <= 0 or all(weight < 0 for weight in w) and D >= 0:
+        return False
+    return any(u * start[0] + v * start[1] - b > 0 for (u, v), b in zip(normals, offsets))
+
+
+def rational_unit_vector(angle: float, denominator: int) -> tuple:
+    """A rational unit vector near (cos angle, sin angle), from a rational tangent of half the angle."""
+    # (1 - s^2, 2 s) / (1 + s^2) is a unit vector for every rational s, and keeping |s| <= 1 by
+    # turning a vector beyond a quarter turn through pi keeps the denominator small
+    angle = math.remainder(angle, 2.0 * math.pi)
+    flip = abs(angle) > math.pi / 2
+    s = Fraction(math.tan((angle - math.copysign(math.pi, angle) if flip else angle) / 2.0))
+    s = s.limit_denominator(denominator)
+    u, v = (1 - s * s) / (1 + s * s), 2 * s / (1 + s * s)
+    return (-u, -v) if flip else (u, v)
+
+
+def rationalise(parameters: np.ndarray, denominator: int) -> tuple:
+    """An exact instance (normals, offsets, start) near the eight floating-point parameters."""
+    normals = tuple(rational_unit_vector(float(angle), denominator) for angle in parameters[:3])
+    offsets = tuple(Fraction(float(b)).limit_denominator(denominator) for b in parameters[3:6])
+    start = tuple(Fraction(float(c)).limit_denominator(denominator) for c in parameters[6:])
+    return normals, offsets, start
+
+
+def instance_text(normals: tuple, offsets: tuple, start: tuple) -> str:
+    """An exact instance written as fractions, in the form the counterexamples are given."""
+    def vector(values):
+        return "(" + ", ".join(str(value) for value in values) + ")"
+    return (f"a_1 = {vector(normals[0])}, a_2 = {vector(normals[1])}, a_3 = {vector(normals[2])}, "
+            f"b = {vector(offsets)}, x0 = {vector(start)}")
