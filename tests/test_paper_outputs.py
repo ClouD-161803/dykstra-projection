@@ -696,5 +696,26 @@ class StallStudyOutputTests(unittest.TestCase):
         self.assertEqual(numbers["spanning_relative"], numbers["stalled_relative"])
 
 
+class WedgeFamilyTests(unittest.TestCase):
+    def test_a_wedge_problem_is_the_sweep_s_wedge_and_canonical_start_from_one_stream(self) -> None:
+        for theta, p in benchmark.WEDGE_TIERS:
+            with self.subTest(theta=theta, p=p):
+                family = problem_generators.WedgeTestPlanes(theta, p)
+                A, b, z = family.problem(11)
+                rng = np.random.RandomState(11)
+                geometry = stall_angles.wedge(theta, p, rng)
+                start, reference = stall_angles.canonical_start(geometry, rng)
+                for drawn, expected in zip((A, b, z), (geometry.A, geometry.b, start)):
+                    np.testing.assert_array_equal(drawn, expected)
+                self.assertEqual(len(b), family.num_planes)
+                quadprog = ConvexProjectionSolver._find_optimal_solution(z, A, b)
+                np.testing.assert_allclose(quadprog, reference, rtol=0.0, atol=1e-12)
+
+    def test_stall_angles_imports_the_shared_geometry_rather_than_redefining_it(self) -> None:
+        for name in ("Geometry", "haar_rotation", "corner_normals", "canonical_start",
+                     "START_DISTANCE", "BOX_HALF_WIDTH", "CORNER_HALF_WIDTH"):
+            self.assertIs(getattr(stall_angles, name), getattr(problem_generators, name))
+
+
 if __name__ == "__main__":
     unittest.main()
