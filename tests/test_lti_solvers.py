@@ -1596,5 +1596,113 @@ class LTIOverheadTests(unittest.TestCase):
                 np.testing.assert_array_equal(result.squared_errors, expected.squared_errors)
 
 
+def profiled_problems() -> dict:
+    """Problems whose solves enter every stage that LTISolver(profile=True) times."""
+    # timing_problem(0) jumps 169 cycles by its envelope and timing_problem(3) certifies at
+    # cycle 11 after reusing work in its KKT tests. The singular problem scans its episodes in
+    # modal form, and the last two fast-forward frozen stalls, one of them part-way through an
+    # episode
+    r2 = np.sqrt(2.0)
+    return {
+        "24 x 8, seed 0": timing_problem(0),
+        "24 x 8, seed 2": timing_problem(2),
+        "24 x 8, seed 3": timing_problem(3),
+        "singular": (np.array([-3.0, 5.0, 3.25]),
+                     np.array([[0.5, 0.5, -1.0], [1.5, -0.5, 0.0], [0.0, -1.75, 1.75],
+                               [0.0, -0.75, 0.5], [0.0, -0.75, 2.0], [0.0, 1.75, -1.0]]),
+                     np.array([-0.25, -2.0, 0.25, -0.75, 0.0, 0.5])),
+        "frozen part-way through": (np.array([10.0, 3.0, 0.5]),
+                                    np.array([[1.0, 0.0, 0.0], [1 / r2, 1 / r2, 0.0], [0.0, 1.0, 0.0],
+                                              [0.0, 0.0, 1.0]]),
+                                    np.array([1.0, r2 - 1e-4, 1.0, 1.5])),
+        "crossing past the budget": (np.array([1e6, 0.0]),
+                                     np.array([[1.0, 0.0], [-1.0, 0.0], [1.0, 0.0], [0.0, 1.0]]),
+                                     np.array([1.0, 0.0, 0.5, 1.0])),
+    }
+
+
+def profiled_runs():
+    """A profiled solve and the same solve unprofiled, for every preset, problem and budget."""
+    from contextlib import nullcontext
+    # Without the KKT test the deflated_modal preset reaches a final active set without settling
+    # and jumps to the budget, which no settling solve does
+    cases = [(preset, name, budget, False) for preset in lti_solver.PRESETS
+             for name in profiled_problems() for budget in (6, 64, 400)]
+    cases += [("deflated_modal", name, 400, True) for name in ("24 x 8, seed 2", "24 x 8, seed 3")]
+    problems = profiled_problems()
+    for preset, name, budget, without_kkt in cases:
+        z, A, b = problems[name]
+        kwargs = dict(preset=preset, track_error=True, plot_errors=True, plot_active_halfspaces=True)
+        with mock.patch.object(lti_solver, "kkt_certificate",
+                               return_value=None) if without_kkt else nullcontext():
+            plain = lti_solver.LTISolver(z, A, b, budget, **kwargs).solve()
+            solver = lti_solver.LTISolver(z, A, b, budget, profile=True, **kwargs)
+            profiled = solver.solve()
+        yield f"{preset}, {name}, {budget} cycles", budget, plain, profiled, solver.profile
+
+
+class LTIProfileTests(unittest.TestCase):
+    def test_a_profiled_solve_leaves_every_output_bitwise_unchanged(self) -> None:
+        fields = ("projection", "path", "squared_errors", "stalled_errors", "converged_errors",
+                  "errors_for_plotting", "active_half_spaces", "settled_at", "certificate")
+        entered = set()
+        for label, _, plain, profiled, profile in profiled_runs():
+            with self.subTest(run=label):
+                for field in fields:
+                    np.testing.assert_array_equal(getattr(profiled, field), getattr(plain, field),
+                                                  err_msg=field)
+            entered |= {stage for stage, entries in profile["entries"].items() if entries}
+        # every stage but other, which holds the time between stages, is entered by some run
+        self.assertEqual(entered, set(lti_solver.STAGES) - {"other"})
+
+    def test_exact_evaluated_and_skipped_cycles_add_up_to_the_cycles_run(self) -> None:
+        # A KKT test that passes at an episode's entry or at a deflated limit settles before the
+        # episode's first cycle, and one at a final active set after the cycle it settles at
+        for label, budget, _, profiled, profile in profiled_runs():
+            with self.subTest(run=label):
+                counts, settled_by = profile["counts"], profile["settled_by"]
+                if settled_by is None:
+                    expected = budget
+                elif settled_by in ("episode entry", "deflated limit"):
+                    expected = profiled.settled_at - 1
+                else:
+                    expected = profiled.settled_at
+                self.assertEqual(counts["exact_cycles"] + counts["evaluated_cycles"] + counts["skipped_cycles"],
+                                 expected)
+                self.assertEqual(counts["envelope_skipped_cycles"] + counts["stall_skipped_cycles"]
+                                 + counts["budget_skipped_cycles"], counts["skipped_cycles"])
+                self.assertEqual(counts["kkt_attempts"], len(profile["kkt_tests"]))
+                self.assertEqual(counts["kkt_passes"], int(profiled.certificate == "kkt"))
+                self.assertEqual(profile["settled_by"] is None, profiled.settled_at is None)
+
+    def test_the_cost_of_a_kkt_test_without_the_memo_is_what_it_costs_without_one(self) -> None:
+        # Seed 3 reuses derived supports and rejected ones in its six KKT tests before cycle 11
+        def memo_free(*args, tally=None):
+            return lti_numerics.kkt_certificate(*args[:5], tally=tally)
+
+        z, A, b = timing_problem(3)
+        solver = LTIVer5Solver(z, A, b, 64, profile=True, dimensions=8)
+        solver.solve()
+        with mock.patch.object(lti_solver, "kkt_certificate", memo_free):
+            fresh = LTIVer5Solver(z, A, b, 64, profile=True, dimensions=8)
+            fresh.solve()
+        tests, fresh_tests = solver.profile["kkt_tests"], fresh.profile["kkt_tests"]
+        self.assertEqual(len(tests), len(fresh_tests))
+        self.assertEqual([test["flops_without_memo"] for test in tests],
+                         [test["flops"] for test in fresh_tests])
+        self.assertTrue(any(test["flops"] < test["flops_without_memo"] for test in tests))
+        self.assertEqual(sum(test["flops"] for test in tests), solver.profile["flops"]["kkt_test"])
+
+    def test_profile_is_a_flag_and_a_plain_solve_leaves_no_profile(self) -> None:
+        z, A, b = timing_problem(3)
+        for value in ("yes", 1, None):
+            with self.subTest(profile=value):
+                with self.assertRaisesRegex(ValueError, "profile"):
+                    LTIVer5Solver(z, A, b, 8, profile=value)
+        solver = LTIVer5Solver(z, A, b, 8)
+        solver.solve()
+        self.assertIsNone(solver.profile)
+
+
 if __name__ == "__main__":
     unittest.main()
