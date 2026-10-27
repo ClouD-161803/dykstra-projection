@@ -13,7 +13,11 @@ import numpy as np
 WORKING_VERSION = Path(__file__).resolve().parents[1] / "Python" / "Working Version"
 sys.path.insert(0, str(WORKING_VERSION))
 
-from convex_projection_solver import DykstraProjectionSolver, DykstraStallDetectionSolver
+from convex_projection_solver import (
+    DykstraMapHybridSolver,
+    DykstraProjectionSolver,
+    DykstraStallDetectionSolver,
+)
 
 
 FAST_FORWARD_LOG = re.compile(
@@ -193,6 +197,21 @@ class SolverRegressionTests(unittest.TestCase):
                 ).solve()
                 self.assertEqual(np.flatnonzero(~np.isnan(result.stalled_errors)).tolist(),
                                  list(range(2, 17)))
+
+    def test_hybrid_switches_to_dykstra_corrections_on_a_boundary(self) -> None:
+        """On the wedge y <= 0, y <= x tan(20 degrees), the hybrid's first cycle from
+        (-1, 1) uses MAP corrections and lands on a boundary point that is not the
+        projection. Rounding that point to ten decimals before testing membership put it
+        outside, so the hybrid kept its zero MAP corrections and held squared error 0.117
+        at every later cycle."""
+        A = np.array([[0.0, 1.0], [-np.tan(np.radians(20.0)), 1.0]])
+        b = np.zeros(2)
+        z = np.array([-1.0, 1.0])
+        hybrid = DykstraMapHybridSolver(z, A, b, 20, track_error=True).solve()
+        plain = DykstraProjectionSolver(z, A, b, 20, track_error=True).solve()
+
+        self.assertLess(hybrid.squared_errors[-1], 1e-20)
+        np.testing.assert_allclose(hybrid.projection, plain.projection, rtol=0.0, atol=1e-12)
 
 
 if __name__ == "__main__":
