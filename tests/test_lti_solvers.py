@@ -1337,6 +1337,20 @@ class LTISolverRegressionTests(unittest.TestCase):
         projection = DykstraProjectionSolver(z, N, b, max_iter=0).actual_projection
         np.testing.assert_allclose(z - N.T @ multipliers, projection, rtol=0.0, atol=1e-12)
 
+    def test_nonnegative_quadratic_drops_a_row_entering_at_zero(self) -> None:
+        # Row 2 is tight at the projection with a zero multiplier, so it enters with a
+        # gradient at rounding level and its solve gives it exactly zero. Its step ratio
+        # was then 0 / 0, which turned every multiplier into NaN and restarted the
+        # search, and it ended 1.15 away from the projection
+        raw = np.array([[-0.5, 0.5, 2.5, 0.5], [0.0, -1.5, -1.5, 0.0], [0.5, 1.0, 0.0, -0.5],
+                        [0.5, -1.0, -0.5, -1.5], [-1.0, 0.0, 0.0, 1.0]])
+        N = raw / np.linalg.norm(raw, axis=1)[:, None]
+        z = np.array([-2.5, -1.5, 1.5, -4.5])
+        b = N @ np.array([-1.0, -0.5, 0.0, -1.0]) + np.array([0.75, 0.25, 0.0, 0.75, 0.25])
+        multipliers = nonnegative_quadratic(N @ N.T, N @ z - b)
+        projection = DykstraProjectionSolver(z, N, b, max_iter=0).actual_projection
+        np.testing.assert_allclose(z - N.T @ multipliers, projection, rtol=0.0, atol=1e-12)
+
     def test_nonnegative_quadratic_keeps_a_small_positive_gradient_beside_a_large_one(self) -> None:
         # A noise threshold scaled by the largest entry of c let it hide a small positive
         # gradient
