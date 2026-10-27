@@ -1439,6 +1439,23 @@ class LTISolverRegressionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "max_iter"):
                     record_schedule(z, A, b, max_iter)
 
+    def test_a_second_solve_starts_afresh_and_leaves_the_first_result_alone(self) -> None:
+        # solve() carried on from the state a previous call left, and wrote its history
+        # into the arrays the first result holds
+        z, A, b = box_line_problem()
+        for solver_type in LTI_SOLVERS:
+            with self.subTest(solver=solver_type.__name__):
+                solver = solver_type(z, A, b, max_iter=30, track_error=True, plot_errors=True,
+                                     plot_active_halfspaces=True)
+                first = solver.solve()
+                fields = ("projection", "path", "squared_errors", "errors_for_plotting", "active_half_spaces")
+                kept = {name: np.copy(getattr(first, name)) for name in fields}
+                second = solver.solve()
+                self.assertEqual((second.settled_at, second.certificate), (first.settled_at, first.certificate))
+                for name, value in kept.items():
+                    np.testing.assert_array_equal(getattr(first, name), value, err_msg=name)
+                    np.testing.assert_array_equal(getattr(second, name), value, err_msg=name)
+
     def test_untouched_coordinate_does_not_change_the_settlement(self) -> None:
         # Every episode of this problem is regular in the plane. A coordinate no constraint
         # touches once made I - A_m singular, so the closed_form to frozen_stall presets
