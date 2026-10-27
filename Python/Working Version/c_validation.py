@@ -2,7 +2,8 @@
 C-implementation paragraph of the SIAM paper's supplement.
 
 Run from this folder with `python c_validation.py` after building the libraries in the
-repository's C folder. On problems 0 to SEEDS - 1 of each size tier in TIERS, drawn by
+repository's C folder, or with `--quick` for two small tiers written to a temporary
+directory. On problems 0 to SEEDS - 1 of each size tier in TIERS, drawn by
 problem_generators.problem, it prints and writes to results/paper/tab-c-validation.tex:
 
 - the largest infinity-norm distance between the C and Python Dykstra iterates at each
@@ -15,9 +16,14 @@ problem_generators.problem, it prints and writes to results/paper/tab-c-validati
 - and the same checks on the degenerate problems of edge_cases().
 """
 
+import argparse
+import tempfile
+import time
+
 import numpy as np
 
 import c_solvers
+import paper_figures
 from convex_projection_solver import ConvexProjectionSolver, DykstraProjectionSolver
 from lti_solver import LTIVer5Solver
 from paper_figures import quiet_accelerate_warnings, save_tex
@@ -26,6 +32,8 @@ from problem_generators import problem, problem_seed
 
 TIERS = ((12, 4), (20, 6), (28, 8), (36, 10))
 SEEDS = 10
+# The tiers and problems per tier under --quick, chosen here
+QUICK_TIERS, QUICK_SEEDS = ((12, 4), (20, 6)), 2
 BUDGETS = (200, 2000)
 CERTIFIED_BUDGET = 10**6
 
@@ -164,5 +172,21 @@ def run() -> dict:
             "cycle_disagreements": cycle_disagreements}
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Parse the command line and run."""
+    global TIERS, SEEDS
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--quick", action="store_true",
+                        help="two small tiers written to a temporary directory")
+    args = parser.parse_args()
+    began = time.perf_counter()
+    if args.quick:
+        TIERS, SEEDS = QUICK_TIERS, QUICK_SEEDS
+        paper_figures.OUTPUT_DIR = tempfile.mkdtemp(prefix="c_validation_")
     run()
+    print(f"Finished in {time.perf_counter() - began:.0f} s: tab-c-validation.tex in "
+          f"{paper_figures.OUTPUT_DIR}")
+
+
+if __name__ == "__main__":
+    main()
