@@ -406,5 +406,69 @@ class BenchmarkRunTests(unittest.TestCase):
                 self.assertLess(record["projection error"], 1e-9)
 
 
+import stall_grid
+from convex_projection_solver import DykstraProjectionSolver
+
+
+def batch_record(z: np.ndarray, A: np.ndarray, b: np.ndarray, horizon: int) -> dict:
+    """The stall_grid record of one problem run alone."""
+    reference = ConvexProjectionSolver._find_optimal_solution(z, A, b)
+    batch = stall_grid.run_batch(z[None], A[None], b[None], reference[None], horizon)
+    return stall_grid.summarise_runs(batch, z.size)[0]
+
+
+class StallDetectorTests(unittest.TestCase):
+    def test_the_batch_run_tracks_the_core_solver_cycle_by_cycle(self) -> None:
+        drawn = [problem_generators.problem(12, 4, stall_grid.grid_seed(12, 4, i))
+                 for i in range(3)]
+        A, b, z = (np.array([d[k] for d in drawn]) for k in range(3))
+        reference = np.array([ConvexProjectionSolver._find_optimal_solution(z[i], A[i], b[i])
+                              for i in range(3)])
+        errors = stall_grid.run_batch(z, A, b, reference, 300)["errors"]
+        for i in range(3):
+            solver = DykstraProjectionSolver(z[i], A[i], b[i], 300, track_error=True)
+            expected = np.asarray(solver.solve().squared_errors)
+            np.testing.assert_allclose(errors[i], expected, rtol=0.0, atol=1e-12 * (1 + expected.max()))
+
+    def test_the_square_and_line_stall_lasts_as_the_theorem_says_under_both_detectors(self) -> None:
+        for line_first in (False, True):
+            A, b = square_line_example.square_line_problem(line_first)
+            states = square_line_example.dykstra_cycles(square_line_example.START, A, b, 1)
+            n_stall = square_line_example.stalling_state(A, b, *states[1][:2])["n_stall"]
+            record = batch_record(square_line_example.START, A, b, 40)
+            for detector in stall_grid.DETECTORS:
+                with self.subTest(line_first=line_first, detector=detector):
+                    # cycle 1 ends in the stalling state, so cycles 2 to N_stall repeat it
+                    self.assertEqual(record[f"stalling_cycles_{detector}"], n_stall - 1)
+                    self.assertEqual(record[f"longest_period_rank_{detector}"], 2)
+
+    def test_the_relative_detector_ignores_the_scale_and_an_untouched_coordinate(self) -> None:
+        A, b = square_line_example.square_line_problem()
+        z = square_line_example.START
+        expected = batch_record(z, A, b, 40)["stalling_cycles_relative"]
+        scaled = batch_record(1000.0 * z, A, 1000.0 * b, 40)["stalling_cycles_relative"]
+        widened = batch_record(np.append(z, 1e6), np.hstack([A, np.zeros((len(b), 1))]), b,
+                               40)["stalling_cycles_relative"]
+        self.assertEqual((scaled, widened), (expected, expected))
+
+    def test_the_two_approximate_stall_rules_part_on_a_small_repeat(self) -> None:
+        errors = np.array([[1.0, 1.0, 1e-3, 1e-3 + 2e-11, 1e-12, 1e-12]])
+        decimals = stall_grid.approximate_stall_flags(errors, "decimals")[0]
+        relative = stall_grid.approximate_stall_flags(errors, "relative")[0]
+        np.testing.assert_array_equal(decimals, [False, True, False, True, False, False])
+        np.testing.assert_array_equal(relative, [False, True, False, False, False, False])
+        with self.assertRaises(ValueError):
+            stall_grid.approximate_stall_flags(errors, "rounded")
+
+    def test_the_relative_rule_reproduces_stalled_errors(self) -> None:
+        A, b = square_line_example.square_line_problem()
+        z = square_line_example.START
+        result = DykstraProjectionSolver(z, A, b, 40, track_error=True,
+                                         min_error=stall_grid.CONVERGED_SQUARED_ERROR).solve()
+        flags = stall_grid.approximate_stall_flags(np.asarray(result.squared_errors), "relative")
+        np.testing.assert_array_equal(flags, ~np.isnan(np.asarray(result.stalled_errors)))
+        self.assertTrue(flags.any())
+
+
 if __name__ == "__main__":
     unittest.main()
