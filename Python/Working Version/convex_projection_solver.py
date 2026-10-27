@@ -265,26 +265,9 @@ class ConvexProjectionSolver(ABC):
         self.plot_errors = plot_errors
         self.plot_active_halfspaces = plot_active_halfspaces
 
-        # Initialise variables
         self.n = self.A.shape[0]
-        self.x = self.z.copy()
-        self.errors = np.zeros_like(self.z)
-        self.e = [self.errors.copy() for _ in range(self.n)]
-        # Initialise errors_for_plotting as 3D NumPy array
-        self.errors_for_plotting: np.ndarray = np.zeros(
-            (self.max_iter, self.n, len(self.z))
-        )
-        # Track historical projections for path and quiver plotting, size max_iter + 1 for initial point
-        self.x_historical: np.ndarray = np.zeros((self.max_iter + 1, self.n, len(self.z)))
-        # Initialise first point as the initial point z
-        self.x_historical[0, :, :] = self.z.copy()
         self.actual_projection = self._find_optimal_solution(self.z, self.A, self.b)
-        # Active halfspaces tracking, sized for max_iter + 1 to include initial state
-        self.active_half_spaces: np.ndarray = np.zeros((self.n, self.max_iter + 1))
-        # Error tracking arrays sized for max_iter + 1 to include initial error
-        self.squared_errors = np.zeros(self.max_iter + 1)
-        self.stalled_errors = np.full(self.max_iter + 1, np.nan)
-        self.converged_errors = np.full(self.max_iter + 1, np.nan)
+        self._reset_state()
 
     def _caller_stacklevel(self) -> int:
         """Returns the stack level, for warnings.warn in __init__, of the code that
@@ -299,6 +282,21 @@ class ConvexProjectionSolver(ABC):
                                      or frame.f_locals.get("self") is self):
             frame, level = frame.f_back, level + 1
         return level
+
+    def _reset_state(self) -> None:
+        """Sets the iterate, the corrections and every record back to cycle 0, so that a
+        call of solve() starts afresh and returns arrays of its own."""
+        self.x = self.z.copy()
+        self.e = [np.zeros_like(self.z) for _ in range(self.n)]
+        # The records span max_iter + 1 cycles, since cycle 0 is the initial point,
+        # except the corrections, which exist only once a cycle has run
+        self.errors_for_plotting = np.zeros((self.max_iter, self.n, self.dimensions))
+        self.x_historical = np.zeros((self.max_iter + 1, self.n, self.dimensions))
+        self.x_historical[0, :, :] = self.z
+        self.active_half_spaces = np.zeros((self.n, self.max_iter + 1))
+        self.squared_errors = np.zeros(self.max_iter + 1)
+        self.stalled_errors = np.full(self.max_iter + 1, np.nan)
+        self.converged_errors = np.full(self.max_iter + 1, np.nan)
 
     @abstractmethod
     def _update_error(self, m: int, x_temp: np.ndarray, x: np.ndarray, index: int) -> None:
@@ -423,6 +421,8 @@ class DykstraProjectionSolver(ConvexProjectionSolver):
         Returns:
             ProjectionResult: Object containing projection and tracking data.
         """
+        self._reset_state()
+
         # Track error and activity at the initial point
         self._track_error(0)
         self._track_activity(0)
@@ -476,11 +476,11 @@ class DykstraMapHybridSolver(ConvexProjectionSolver):
     lies within the feasible region.
     """
 
-    def __init__(self, *args, **kwargs):
-        """Initialise the hybrid solver with separate error vectors for MAP and Dykstra."""
-        super().__init__(*args, **kwargs)
-        self.e_dykstra = [self.errors.copy() for _ in range(self.n)]
-        self.e_MAP = [self.errors.copy() for _ in range(self.n)]
+    def _reset_state(self) -> None:
+        """Sets the separate error vectors for MAP and Dykstra back to zero as well."""
+        super()._reset_state()
+        self.e_dykstra = [np.zeros_like(self.z) for _ in range(self.n)]
+        self.e_MAP = [np.zeros_like(self.z) for _ in range(self.n)]
 
     def _initialize_iteration(self, i: int) -> None:
         """
@@ -515,6 +515,8 @@ class DykstraMapHybridSolver(ConvexProjectionSolver):
         Returns:
             ProjectionResult: Object containing projection and tracking data.
         """
+        self._reset_state()
+
         # Track error and activity at the initial point
         self._track_error(0)
         self._track_activity(0)
@@ -582,15 +584,17 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
     ROUNDING_UNITS = 64
 
     def __init__(self, *args, **kwargs):
-        """Initialise the stall detection solver with additional tracking."""
+        """Initialise the stall detection solver with the normalised constraints."""
         super().__init__(*args, **kwargs)
         norms = np.linalg.norm(self.A, axis=1)
         self.unit_A = self.A / norms[:, None]
         self.unit_b = self.b / norms
+
+    def _reset_state(self) -> None:
+        """Clears the stall record as well."""
+        super()._reset_state()
         self.stalling = False
-        self.k_stalling = 1
         self.m_stalling = None
-        self.prev_x_no_ffw = None
         self.frozen_visits = 0
         self.active_at_last_visit = np.zeros(self.n, dtype=bool)
 
@@ -684,7 +688,7 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
         Returns:
             ProjectionResult: Object containing projection and tracking data.
         """
-        self.stalling = False
+        self._reset_state()
         
         # Track error at the initial point
         self._track_error(0)
