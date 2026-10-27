@@ -866,6 +866,18 @@ class RepeatedWorkTests(unittest.TestCase):
                 count, _ = self.count_calls("_normalise", solver_type, 2, **TRACKING_FLAGS)
                 self.assertEqual(count, len(BOX_LINE_B))
 
+    def test_activity_is_tested_for_the_record_only_when_plotted(self) -> None:
+        """The record tests every half-space at the start, after every cycle and after every
+        fast-forward."""
+        for solver_type in SOLVERS:
+            with self.subTest(solver=solver_type.__name__):
+                unplotted, _ = self.count_calls("_is_in_half_space", solver_type, 1)
+                plotted, log = self.count_calls("_is_in_half_space", solver_type, 1,
+                                                plot_active_halfspaces=True)
+                fast_forwards = len(FAST_FORWARD_LOG.findall(log))
+                self.assertEqual(plotted - unplotted,
+                                 len(BOX_LINE_B) * (1 + 10 + fast_forwards))
+
 
 if __name__ == "__main__":
     unittest.main()
