@@ -15,6 +15,7 @@ WORKING_VERSION = Path(__file__).resolve().parents[1] / "Python" / "Working Vers
 sys.path.insert(0, str(WORKING_VERSION))
 
 from convex_projection_solver import DykstraProjectionSolver
+import lti_numerics
 from lti_numerics import nonnegative_least_squares, nonnegative_quadratic
 import lti_solver
 from lti_solver import LTIVer1Solver, LTIVer2Solver, LTIVer3Solver, LTIVer4Solver, LTIVer5Solver
@@ -1515,6 +1516,58 @@ class LTISolverRegressionTests(unittest.TestCase):
                         np.testing.assert_allclose(np.delete(lifted.projection, position), plain.projection,
                                                    rtol=0.0, atol=1e-12)
                         self.assertEqual(lifted.projection[position], value)
+
+
+@lti_numerics.ignore_blas_flags
+def timing_problem(seed: int) -> tuple:
+    """Problem number seed of performance_timing's tier of 24 half-spaces in 8 dimensions."""
+    # Generator 2 of the paper's supplement, drawn in the order paper_figures.bounded_problem
+    # and infeasible_start draw it from the legacy generator, here without importing pyplot
+    rng = np.random.RandomState(100000 + 1000 * 24 + seed)
+    spanning = np.vstack([np.eye(8), -np.ones((1, 8))])
+    basis, upper = np.linalg.qr(rng.standard_normal((8, 8)))
+    A = spanning @ (basis * np.sign(np.diag(upper))).T
+    angles = rng.uniform(0.0, np.pi / 2, size=(15, 8))
+    A = np.vstack([A, rng.choice([-1, 1], size=(15, 8)) * np.tan(angles)])
+    b = A @ rng.uniform(-2.0, 2.0, size=8) + rng.uniform(0.2, 1.5, size=24)
+    scale = 4.0
+    while True:
+        z = rng.standard_normal(8) * scale
+        if np.any(A @ z > b):
+            return z, A, b
+        scale *= 1.5
+
+
+class LTIOverheadTests(unittest.TestCase):
+    def test_kkt_test_verifies_each_support_and_solves_each_dual_once_per_solve(self) -> None:
+        # Seed 3 tries the KKT test at six episode entries before cycle 11 certifies.
+        # Without the memo it verified 19 supports, 9 of them distinct
+        z, A, b = timing_problem(3)
+        with mock.patch.object(lti_numerics, "_kkt_verify", wraps=lti_numerics._kkt_verify) as verify, \
+                mock.patch.object(lti_numerics, "nonnegative_quadratic",
+                                  wraps=lti_numerics.nonnegative_quadratic) as dual:
+            result = LTIVer5Solver(z, A, b, 11, dimensions=8).solve()
+        self.assertEqual(result.certificate, "kkt")
+        supports = [tuple(call.args[3]) for call in verify.call_args_list]
+        self.assertEqual(len(supports), len(set(supports)))
+        inputs = [call.args[0].tobytes() + call.args[1].tobytes() for call in dual.call_args_list]
+        self.assertEqual(len(inputs), len(set(inputs)))
+
+    def test_kkt_memo_changes_neither_the_settle_cycle_nor_the_result(self) -> None:
+        def memo_free(*args):
+            return lti_numerics.kkt_certificate(*args[:5])
+
+        z, A, b = timing_problem(3)
+        for budget in (6, 11, 64):
+            with self.subTest(budget=budget):
+                with mock.patch.object(lti_solver, "kkt_certificate", memo_free):
+                    reference = LTIVer5Solver(z, A, b, budget, track_error=True, dimensions=8).solve()
+                result = LTIVer5Solver(z, A, b, budget, track_error=True, dimensions=8).solve()
+                self.assertEqual(result.settled_at, reference.settled_at)
+                self.assertEqual(result.certificate, reference.certificate)
+                np.testing.assert_array_equal(result.projection, reference.projection)
+                np.testing.assert_array_equal(result.path, reference.path)
+                np.testing.assert_array_equal(result.squared_errors, reference.squared_errors)
 
 if __name__ == "__main__":
     unittest.main()
