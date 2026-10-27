@@ -1,7 +1,8 @@
 """The random polyhedra of the SIAM paper and its supplement: the two generators of the
 supplement's section Reproducibility, RandomTestPlanes (Generator 1, rejection sampling) and
-BoundedTestPlanes (Generator 2, direct construction), and the wedge family of the benchmark,
-WedgeTestPlanes, which the supplement's angle sweeps in stall_angles.py also draw.
+BoundedTestPlanes (Generator 2, direct construction), and the two structured families of the
+benchmark, WedgeTestPlanes, which the supplement's angle sweeps in stall_angles.py also draw,
+and BoxSlabTestPlanes, on which Dykstra's algorithm has a stalling period.
 
 Each class returns constraints A @ x <= b with one row of A per half-space. None normalises
 its rows, because the law of the normals is stated for the rows as drawn, and the last
@@ -14,7 +15,7 @@ axis more often than a uniformly random direction does, thus the law does not ma
 direction equally likely. tests/test_paper_outputs.py measures the excess at p = 2.
 
 Every class draws from a random source passed in by the caller. problem() and the problem
-method of the wedge family seed a legacy RandomState, whose streams numpy keeps fixed across
+method of the two families seed a legacy RandomState, whose streams numpy keeps fixed across
 versions, so that a seed names the same problem on every installation.
 """
 
@@ -28,12 +29,24 @@ import numpy as np
 ANCHOR_HALF_WIDTH = 2.0
 SLACK_RANGE = (0.2, 1.5)
 
-# Chosen here: the geometry of the wedge and of the vertex of stall_angles.py, in the units of
-# the coordinates. A corner is uniform on [-CORNER_HALF_WIDTH, CORNER_HALF_WIDTH]^p, a box has
-# half-width BOX_HALF_WIDTH, and a canonical start lies START_DISTANCE from its corner
+# Chosen here: the geometry of the wedge, of the vertex of stall_angles.py, and of the box and
+# slab, in the units of the coordinates. A corner, or the centre of a box, is uniform on
+# [-CORNER_HALF_WIDTH, CORNER_HALF_WIDTH]^p, a box has half-width BOX_HALF_WIDTH, and a
+# canonical start lies START_DISTANCE from its corner
 START_DISTANCE = 1.0
 BOX_HALF_WIDTH = 1.0
 CORNER_HALF_WIDTH = 1.0
+
+# Chosen here: the slab of BoxSlabTestPlanes. Its near boundary lies at a distance uniform on
+# SLAB_GAP_RANGE from the box's vertex, its far boundary SLAB_WIDTH beyond, and the start lies
+# beyond the vertex by a distance uniform on START_BEYOND_RANGE along every axis of the box, all
+# in the units of the coordinates. The gaps hold the 0.447 of the 2-D example. The stall lasts
+# about the start's distance over the gap. With these ranges each of the 60 seeds of
+# benchmark.py's block, 20 in each of p = 2, 4, and 8, has 2 to 1029 stalling cycles, and on
+# 58 of them the stalled point's squared error exceeds 1e-3
+SLAB_GAP_RANGE = (0.05, 0.5)
+SLAB_WIDTH = 0.1
+START_BEYOND_RANGE = (5.0, 20.0)
 
 # A member of a family with a known corner: its constraints A x <= b, its corner, the number of
 # corner rows at the top of A, and the unit directions off the wedge's plane as columns, none
@@ -195,6 +208,78 @@ class WedgeTestPlanes:
         geometry = self.geometry(rng)
         z, _ = canonical_start(geometry, rng)
         return geometry.A, geometry.b, z
+
+
+class BoxSlabTestPlanes:
+    """The box-and-slab family: the square-and-line example of the article's stalling section,
+    dykstra/square_line_example.py, lifted to p dimensions.
+
+    The box |x_k| <= BOX_HALF_WIDTH gives 2 p rows, x_k <= BOX_HALF_WIDTH then
+    -x_k <= BOX_HALF_WIDTH for k = 1, ..., p, as the square's right, left, top, and bottom. The
+    slab gives two rows with opposite normals, u^T x <= high then -u^T x <= -low, as the
+    line's below and above. The slab cuts a vertex v of the box off, whose sign vector sigma
+    and the components w = sigma * u of the slab's normal are drawn, the latter standard
+    normal and redrawn until the near boundary u^T x = low meets the box. low places that
+    boundary at a distance uniform on SLAB_GAP_RANGE from v, and high lies SLAB_WIDTH beyond
+    it. The start lies in the cone of points beyond v on every axis, by a distance uniform on
+    START_BEYOND_RANGE along each. The whole is turned by a Haar-distributed rotation Q and
+    moved to a centre uniform on [-CORNER_HALF_WIDTH, CORNER_HALF_WIDTH]^p.
+
+    Dykstra's algorithm then stalls. The p faces at v are orthogonal and all active, hence
+    each cycle lands on v, and the near boundary of the slab returns the point to one place.
+    The correction of every face k with w_k < 0 drains by a fixed amount per cycle, and the
+    point stays until the first of them is spent. The 2-D example's line is a slab of zero
+    width. Lifted at zero width, 4 of 60 draws in p = 2, 4, and 8 were rejected by quadprog as
+    inconsistent, which leaves them without a reference projection, hence SLAB_WIDTH > 0.
+
+    A seed varies the problem through six draws, in the order of the stream: sigma, the
+    distance of the near boundary from v, w with its redraws, Q, the centre, and the start's
+    distances beyond v. p fixes everything else.
+    """
+
+    def __init__(self, num_dimensions: int) -> None:
+        if num_dimensions < 2:
+            raise ValueError("BoxSlabTestPlanes needs at least two dimensions.")
+        self.num_dimensions = num_dimensions
+        self.num_planes = 2 * num_dimensions + 2
+
+    def _draw(self, rng) -> tuple:
+        """The constraints, the vertex v, and the outward axes at v as columns."""
+        p = self.num_dimensions
+        signs = rng.choice([-1.0, 1.0], size=p)
+        gap = rng.uniform(*SLAB_GAP_RANGE)
+        # the near boundary meets the box when low is below the largest u^T x over the box,
+        # i.e. when gap |w| is below 2 BOX_HALF_WIDTH times the sum of the |w_k| with w_k < 0.
+        # the test asks for half of that, which leaves a slice of the box beyond the boundary
+        while True:
+            components = rng.standard_normal(p)
+            spare = BOX_HALF_WIDTH * np.abs(components[components < 0]).sum()
+            if gap * np.linalg.norm(components) < spare:
+                break
+        normal = signs * components
+        low = BOX_HALF_WIDTH * components.sum() + gap * np.linalg.norm(normal)
+        high = low + SLAB_WIDTH * np.linalg.norm(normal)
+        box = np.repeat(np.eye(p), 2, axis=0) * np.tile([1.0, -1.0], p)[:, None]
+        rows = np.vstack([box, normal, -normal])
+        offsets = np.concatenate([np.full(2 * p, BOX_HALF_WIDTH), [high, -low]])
+        rotation = haar_rotation(rng, p)
+        centre = rng.uniform(-CORNER_HALF_WIDTH, CORNER_HALF_WIDTH, size=p)
+        A = _matmul(rows, rotation.T)
+        b = _matmul(A, centre) + offsets
+        outward = rotation * signs
+        return A, b, centre + BOX_HALF_WIDTH * outward.sum(axis=1), outward
+
+    def draw(self, rng) -> tuple[np.ndarray, np.ndarray]:
+        """Draw the constraints of a box and slab."""
+        A, b, _, _ = self._draw(rng)
+        return A, b
+
+    def problem(self, seed: int) -> tuple:
+        """A box and slab and its start, drawn from one seeded stream. Returns (A, b, z)."""
+        rng = np.random.RandomState(seed)
+        A, b, vertex, outward = self._draw(rng)
+        beyond = rng.uniform(*START_BEYOND_RANGE, size=self.num_dimensions)
+        return A, b, vertex + _matmul(outward, beyond)
 
 
 def corner_normals(geometry: Geometry) -> np.ndarray:
