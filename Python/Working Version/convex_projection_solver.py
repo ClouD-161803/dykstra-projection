@@ -186,16 +186,16 @@ class ConvexProjectionSolver(ABC):
             raise ValueError("dimensions must match the dimension of point.")
         # quadprog rounds every coordinate in its unconstrained step and corrects only the
         # directions of the active normals. A feasible point is therefore returned as
-        # itself, and a coordinate no constraint touches keeps the point's value.
+        # itself, and a coordinate no constraint touches keeps the point's value. Nothing
+        # here uses matmul, which numpy 2.1 linked to Accelerate flags with spurious
+        # divide-by-zero warnings from size 16 up.
         if np.all((A * point).sum(axis=1) <= b):
             return point.copy()
-
         touched = np.any(A != 0, axis=0)
-        identity = np.eye(np.count_nonzero(touched))
-        P = 2 * np.matmul(identity.T, identity)
-        q = -2 * np.matmul(identity.T, point[touched])
         actual_projection = point.copy()
-        actual_projection[touched] = quadprog_solve_qp(P, q, A[:, touched], b)
+        actual_projection[touched] = quadprog_solve_qp(
+            2 * np.eye(np.count_nonzero(touched)), -2 * point[touched], A[:, touched], b
+        )
         return actual_projection
 
     @staticmethod
