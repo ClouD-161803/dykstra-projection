@@ -1,6 +1,8 @@
 """Regression tests for plotting and CSV result handling."""
 
+import contextlib
 import csv
+import io
 from pathlib import Path
 import sys
 import tempfile
@@ -102,6 +104,37 @@ class ResultExporterRegressionTests(unittest.TestCase):
 
         np.testing.assert_array_equal(loaded["constraints_A"], np.array([[1.0, 0.0]]))
         np.testing.assert_array_equal(loaded["constraints_b"], np.array([1.0]))
+
+    def test_csv_loader_reads_blank_errors_as_nan(self) -> None:
+        """export writes a cycle that is not stalled, or not converged, as a blank cell,
+        from a NaN in the result. load read the blank back as None in an object array,
+        which np.isnan rejects and which never equals the exported array."""
+        result = ProjectionResult(
+            projection=np.array([0.5, 0.5]),
+            path=np.zeros((3, 1, 2)),
+            squared_errors=np.array([1.0, 0.25, 0.25]),
+            stalled_errors=np.array([np.nan, np.nan, 0.25]),
+            converged_errors=np.array([np.nan, 0.25, 0.25]),
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_path = Path(temporary_directory) / "result.csv"
+            with contextlib.redirect_stdout(io.StringIO()):
+                ResultExporter.export(
+                    result=result,
+                    output_path=str(output_path),
+                    solver_name="Dykstra",
+                    initial_point=np.array([1.0, 1.0]),
+                    A=np.array([[1.0, 0.0]]),
+                    b=np.array([0.5]),
+                    max_iter=2,
+                )
+            loaded = ResultExporter.load(str(output_path))
+
+        for key in ("stalled_errors", "converged_errors"):
+            with self.subTest(section=key):
+                self.assertEqual(loaded[key].dtype, np.float64)
+                np.testing.assert_array_equal(loaded[key], getattr(result, key))
 
 
 if __name__ == "__main__":
