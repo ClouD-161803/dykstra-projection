@@ -236,7 +236,8 @@ class ConvexProjectionSolver(ABC):
             b: Vector of constant offsets for half-spaces.
             max_iter: Maximum number of iterations.
             track_error: Whether to track squared error at each iteration.
-            min_error: Minimum error threshold for convergence.
+            min_error: Squared error below which a cycle counts as converged in
+                converged_errors. It never stops the run early.
             dimensions: Optional consistency check. If omitted, inferred from z.
             plot_errors: Whether to track errors for plotting.
             plot_active_halfspaces: Whether to track active half-spaces.
