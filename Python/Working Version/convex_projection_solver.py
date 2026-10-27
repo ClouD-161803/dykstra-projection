@@ -343,7 +343,7 @@ class ConvexProjectionSolver(ABC):
         """
         if self.track_error:
             distance = self.actual_projection - self.x
-            error = round(np.dot(distance, distance), 10)
+            error = np.dot(distance, distance)
             is_equal1 = i > 0 and self.squared_errors[i - 1] == error
             is_equal2 = i > 0 and self.stalled_errors[i - 1] == error
 
