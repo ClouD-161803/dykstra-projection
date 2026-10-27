@@ -17,6 +17,22 @@ dependencies = [
 dev = [
     "pytest>=8",
 ]
+# The QP solvers that Python/Working Version/benchmark.py compares against, and scipy for the
+# linear programs of Generator 1 in problem_generators.py. Install with
+# `uv sync --group benchmark`, since `uv sync` alone leaves them out.
+benchmark = [
+    "qpsolvers>=4.13",
+    "scipy",
+    "clarabel",
+    "cvxopt",
+    "daqp",
+    "highspy",
+    "osqp",
+    "piqp",
+    "proxsuite",
+    "qpalm",
+    "scs",
+]
 
 [tool.uv]
 # research code, not an installable package: Python/ holds versioned script folders, not a module tree.
