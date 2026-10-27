@@ -386,9 +386,12 @@ def _lawson_hanson(k: int, gradient, solve) -> np.ndarray:
             if np.all(step[support] > 0.0):
                 lam = step
                 break
-            # Move towards the new solution until the first multiplier reaches zero
+            # Move towards the new solution until the first multiplier reaches zero. A
+            # row entering at zero whose solve also gives it zero does not move, and
+            # its ratio 0 / 0 would turn every multiplier into NaN
             blocked = support[step[support] <= 0.0]
-            ratios = lam[blocked] / (lam[blocked] - step[blocked])
+            gaps = lam[blocked] - step[blocked]
+            ratios = np.divide(lam[blocked], gaps, out=np.zeros(len(blocked)), where=gaps != 0.0)
             first = int(np.argmin(ratios))
             lam = lam + ratios[first] * (step - lam)
             lam[blocked[first]] = 0.0
