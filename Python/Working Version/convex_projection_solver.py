@@ -36,6 +36,11 @@ class ConvexProjectionSolver(ABC):
     convex sets (half-spaces).
     """
 
+    # Fraction of the magnitudes involved below which _track_error takes the squared
+    # errors of consecutive cycles as equal. Being relative, the decision does not
+    # depend on the scale of the problem or on a coordinate that no constraint touches.
+    RELATIVE_TOLERANCE = 1e-10
+
     @staticmethod
     def _normalise(normal: np.ndarray, offset: np.ndarray) -> tuple:
         """
@@ -338,19 +343,24 @@ class ConvexProjectionSolver(ABC):
         """
         Track squared error, convergence, and stalling.
 
+        A cycle is converged when its squared error is below min_error, and otherwise
+        stalled when its squared error repeats the previous cycle's to within
+        RELATIVE_TOLERANCE, which absorbs the rounding in a repeated cycle.
+
         Args:
             i: Current iteration.
         """
         if self.track_error:
             distance = self.actual_projection - self.x
             error = np.dot(distance, distance)
-            is_equal1 = i > 0 and self.squared_errors[i - 1] == error
-            is_equal2 = i > 0 and self.stalled_errors[i - 1] == error
+            previous = self.squared_errors[i - 1] if i > 0 else np.nan
+            repeats = (i > 0 and abs(error - previous)
+                       <= self.RELATIVE_TOLERANCE * max(error, previous))
 
             if error < self.min_error:
                 self.converged_errors[i] = error
                 self.stalled_errors[i] = np.nan
-            elif is_equal1 or is_equal2:
+            elif repeats:
                 self.stalled_errors[i] = error
                 self.converged_errors[i] = np.nan
             else:
