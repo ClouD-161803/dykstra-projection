@@ -26,6 +26,7 @@ from paper_figures import (
 from lti_numerics import rigorous_deactivation_horizon
 from lti_solver import LTIVer5Solver
 import c_solvers
+import c_validation
 import problem_generators
 import square_line_example
 from convex_projection_solver import ConvexProjectionSolver
@@ -351,6 +352,23 @@ class SquareLineExampleTests(unittest.TestCase):
         self.assertEqual(results["trace_without_kkt"][:5],
                          ["run exactly 1", "evaluated 2", "jumped over 3-15", "evaluated 16",
                           "run exactly 17"])
+
+
+@unittest.skipUnless(c_solvers.libraries_built(), "needs the C solvers: make -C C")
+class CValidationTests(unittest.TestCase):
+    def test_c_and_python_agree_to_rounding_on_a_reduced_battery(self) -> None:
+        original = c_validation.TIERS, c_validation.SEEDS
+        c_validation.TIERS, c_validation.SEEDS = ((12, 4), (20, 6)), 2
+        try:
+            with redirected_output():
+                results = c_validation.run()
+        finally:
+            c_validation.TIERS, c_validation.SEEDS = original
+        self.assertLess(results["worst"]["dykstra distance"], 1e-10)
+        self.assertLess(results["worst"]["accelerated distance"], 1e-10)
+        self.assertEqual(results["mismatched"], 0)
+        self.assertEqual(results["certified"], 4)
+        self.assertLess(results["certified_worst"], 1e-9)
 
 
 if __name__ == "__main__":
