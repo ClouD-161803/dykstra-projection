@@ -3,6 +3,7 @@ Dykstra cycle in scalar auxiliaries, the cycle map of an episode and its closed-
 constants, the envelope horizon, the frozen-stall crossing, and the KKT certificate."""
 
 from collections import namedtuple
+from functools import wraps
 from itertools import combinations
 import numpy as np
 
@@ -47,6 +48,20 @@ ClosedForm = namedtuple("ClosedForm", "A_m x_inf RIA RIA_scale G G_floor beta be
 def rounding_floor(magnitude: np.ndarray) -> np.ndarray:
     """Rounding level of a sum."""
     return _ROUNDING_UNITS * np.finfo(float).eps * magnitude
+
+
+def ignore_blas_flags(function):
+    """Runs function with numpy ignoring the floating-point flags its products raise."""
+    # numpy 2.1 linked to Apple's Accelerate reports the flags that Accelerate leaves set
+    # after products of finite matrices, from about size 15 up, as divide-by-zero,
+    # overflow and invalid-value warnings in matmul. The flags therefore say nothing
+    # about the values, and an infinity or a NaN would still show in the results. The
+    # solvers' and the oracle's entry points carry this, as do the numerics called alone
+    @wraps(function)
+    def quiet(*args, **kwargs):
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            return function(*args, **kwargs)
+    return quiet
 
 
 def unit_constraints(A: np.ndarray, b: np.ndarray) -> tuple:
@@ -399,6 +414,7 @@ def _lawson_hanson(k: int, gradient, solve) -> np.ndarray:
     return lam
 
 
+@ignore_blas_flags
 def nonnegative_least_squares(C: np.ndarray, d: np.ndarray) -> np.ndarray:
     """min ||C l - d|| over l >= 0."""
     # Each support is solved on the columns of C, not the normal equations, whose
@@ -411,6 +427,7 @@ def nonnegative_least_squares(C: np.ndarray, d: np.ndarray) -> np.ndarray:
                           lambda P: (np.linalg.lstsq(C[:, P], d, rcond=None)[0], None))
 
 
+@ignore_blas_flags
 def nonnegative_quadratic(H: np.ndarray, c: np.ndarray) -> np.ndarray:
     """min 1/2 l^T H l - c^T l over l >= 0, H positive semidefinite."""
     abs_H = np.abs(H)
@@ -441,6 +458,7 @@ def _kkt_slack_scale(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray, x: n
     return np.abs(unit_A) @ (np.abs(z) + np.abs(z - x)) + np.abs(unit_b)
 
 
+@ignore_blas_flags
 def kkt_certificate(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray,
                     hint: np.ndarray, active: np.ndarray) -> tuple | None:
     """Projection and multipliers, if proven."""

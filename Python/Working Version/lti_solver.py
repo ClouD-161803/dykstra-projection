@@ -23,8 +23,9 @@ from convex_projection_solver import ConvexProjectionSolver
 from lti_numerics import (RESOLVENT_COND_CAP, RHO_CAP, ClosedForm, active_auxiliaries,
                           active_set_is_final, advance, auxiliary_floor, closed_form,
                           closed_form_activity, cycle_map, deflated_closed_form, exact_cycle,
-                          is_frozen, jump_length, kkt_certificate, predicted_activity,
-                          rounding_floor, stall_crossing, touched_resolvent, unit_constraints)
+                          ignore_blas_flags, is_frozen, jump_length, kkt_certificate,
+                          predicted_activity, rounding_floor, stall_crossing, touched_resolvent,
+                          unit_constraints)
 from projection_result import ProjectionResult
 
 PRESETS = ("cycle_map", "closed_form", "envelope", "frozen_stall", "deflated_modal")
@@ -93,6 +94,7 @@ class LTISolver(ConvexProjectionSolver):
 
     # ---- solve: one exact cycle, then episodes separated by exact switching cycles
 
+    @ignore_blas_flags
     def solve(self) -> ProjectionResult:
         """Project the point."""
         # Every call starts from z with records of its own, so that a second call neither

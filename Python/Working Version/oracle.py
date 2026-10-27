@@ -5,10 +5,11 @@ one exact cycle and jumping the rest of the episode in closed form."""
 import numpy as np
 from convex_projection_solver import ConvexProjectionSolver
 from lti_numerics import (RESOLVENT_COND_CAP, active_auxiliaries, advance, closed_form, cycle_map,
-                          exact_cycle, touched_resolvent, unit_constraints)
+                          exact_cycle, ignore_blas_flags, touched_resolvent, unit_constraints)
 from projection_result import ProjectionResult
 
 
+@ignore_blas_flags
 def record_schedule(z: np.ndarray, A: np.ndarray, b: np.ndarray, max_iter: int) -> tuple:
     """Record an active-set schedule for the constraints ``A @ x <= b``."""
     z, A, b, max_iter = ConvexProjectionSolver._validate_problem(z, A, b, max_iter, None)
@@ -32,6 +33,7 @@ def record_schedule(z: np.ndarray, A: np.ndarray, b: np.ndarray, max_iter: int) 
     return schedule, ProjectionResult(projection=x.copy())
 
 
+@ignore_blas_flags
 def oracle_lti_projection(z: np.ndarray, A: np.ndarray, b: np.ndarray,
                           schedule: list) -> ProjectionResult:
     """Replay with the schedule known."""
