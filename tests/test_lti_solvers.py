@@ -944,9 +944,10 @@ class LTISolverRegressionTests(unittest.TestCase):
 
     def test_idle_member_of_an_equality_does_not_end_a_modal_scan(self) -> None:
         # Rows 2 and 3 are one equality. The active normals lie in the first two
-        # coordinates and only row 4, which never activates, touches the third, so Ver5
-        # scans the episode in its deflated modal form, where the idle member's slack of a
-        # few ulps once predicted a switch on every cycle
+        # coordinates and only row 4, which never activates, touches the third, so with
+        # the certificate set aside, which otherwise settles on entry, Ver5 scans the
+        # episode in its deflated modal form, where the idle member's slack of a few ulps
+        # once predicted a switch on every cycle
         z = np.array([-1.3, -2.0, 0.0])
         A = np.array([[-0.9, -0.5, 0.0], [0.2, -1.9, 0.0], [-0.4, 1.7, 0.0], [0.4, -1.7, 0.0],
                       [0.0, 0.0, 1.0]])
@@ -954,7 +955,8 @@ class LTISolverRegressionTests(unittest.TestCase):
         dykstra = DykstraProjectionSolver(z, A, b, max_iter=20).solve().projection
         solver = LTIVer5Solver(z, A, b, max_iter=20)
         exact_cycles = spy_exact_cycles(solver)
-        result = solver.solve()
+        with mock.patch.object(lti_solver, "kkt_certificate", return_value=None):
+            result = solver.solve()
         self.assertLessEqual(len(exact_cycles), 5)
         np.testing.assert_allclose(result.projection, expected_result(result, solver, dykstra),
                                    rtol=0.0, atol=1e-12)
