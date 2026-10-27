@@ -95,6 +95,10 @@ class LTISolver(ConvexProjectionSolver):
 
     def solve(self) -> ProjectionResult:
         """Project the point."""
+        # Every call starts from z with records of its own, so that a second call neither
+        # continues from where the first stopped nor writes into the arrays it returned
+        self._reset_state()
+        self.settled_at, self.certificate = None, None
         self.unit_A, self.unit_b = unit_constraints(self.A, self.b)
         self.y = np.zeros(self.n)
         self._recorded_y = np.zeros(self.n)
