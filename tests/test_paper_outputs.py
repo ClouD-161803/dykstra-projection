@@ -711,6 +711,9 @@ class StallStudyOutputTests(unittest.TestCase):
 
 
 import csv
+from fractions import Fraction
+
+from dykstra import activity_conjecture
 
 
 def read_n_by_p(path: Path) -> tuple:
@@ -783,6 +786,91 @@ class StallGridPgfplotsTests(unittest.TestCase):
         reference = ConvexProjectionSolver._find_optimal_solution(z, A, b)
         batch = stall_grid.run_batch(z[None], A[None], b[None], reference[None], 40)
         self.assertEqual(batch["relative_period_lengths"], [[n_stall - 1]])
+
+
+class ActivityConjectureTests(unittest.TestCase):
+    def test_the_two_counterexamples_have_the_reviewers_counts_in_exact_arithmetic(self) -> None:
+        expected = {
+            "i": {"total": 6, "per_half_space": 4, "total_after_opening": 3,
+                  "per_half_space_after_opening": 3, "total_violated_start": 3,
+                  "per_half_space_violated_start": 3},
+            "ii": {"total": 6, "per_half_space": 3, "total_after_opening": 4,
+                   "per_half_space_after_opening": 2, "total_violated_start": 4,
+                   "per_half_space_violated_start": 2},
+        }
+        for label, (normals, offsets, start) in activity_conjecture.COUNTEREXAMPLES.items():
+            with self.subTest(label=label):
+                self.assertTrue(activity_conjecture.exact_general_position(normals, offsets, start))
+                run = activity_conjecture.exact_run(normals, offsets, start)
+                self.assertEqual(run["counts"], expected[label])
+                self.assertEqual(run["certificate"], "wedge")
+                # the activity certified final stays so over 300 further exact cycles
+                x, y, final = run["point"], run["auxiliaries"], run["activity"][-1]
+                for _ in range(300):
+                    x, y, active = activity_conjecture.exact_cycle(x, y, normals, offsets)
+                    self.assertEqual(active, final)
+
+    def test_floating_point_runs_count_as_the_exact_runs_do(self) -> None:
+        instances = list(activity_conjecture.COUNTEREXAMPLES.values())
+        parameters = activity_conjecture.draw_parameters(np.random.default_rng(11), 300)
+        instances += [activity_conjecture.rationalise(row, 1000) for row in parameters[:12]]
+        for normals, offsets, start in instances:
+            if not activity_conjecture.exact_general_position(normals, offsets, start):
+                continue
+            exact = activity_conjecture.exact_run(normals, offsets, start)
+            runs = activity_conjecture.float_runs_on(
+                np.array([normals], dtype=float), np.array([offsets], dtype=float),
+                np.array([start], dtype=float), 2000)
+            with self.subTest(instance=activity_conjecture.instance_text(normals, offsets, start)):
+                self.assertIsNotNone(exact["certificate"])
+                self.assertTrue(activity_conjecture.usable(runs)[0])
+                self.assertEqual({name: int(runs[name][0]) for name in exact["counts"]},
+                                 exact["counts"])
+
+    def test_a_tiny_sample_obeys_the_identities_between_the_counts(self) -> None:
+        parameters = activity_conjecture.draw_parameters(np.random.default_rng(12), 300)
+        self.assertTrue(activity_conjecture.valid(parameters).all())
+        runs = activity_conjecture.float_runs(parameters, 2000)
+        cycle1 = runs["cycle1"].sum(axis=1)
+        np.testing.assert_array_equal(runs["total"], runs["total_after_opening"] + cycle1)
+        # the opening cycle adds at most one change to each half-space
+        self.assertTrue((runs["per_half_space"] <= runs["per_half_space_after_opening"] + 1).all())
+        self.assertTrue((runs["per_half_space_after_opening"] <= runs["total_after_opening"]).all())
+        self.assertTrue(activity_conjecture.usable(runs).any())
+
+    def test_general_position_rejects_each_degenerate_case(self) -> None:
+        third = 2.0 * np.pi / 3.0
+        triangle = np.array([0.0, third, 2.0 * third, 1.0, 1.0, 1.0, 3.0, 0.0])
+        cases = {"triangle": (triangle, True)}
+        # offsets of the opposite sign leave the positively spanning normals no common point
+        cases["empty"] = (np.concatenate([triangle[:3], -triangle[3:6], triangle[6:]]), False)
+        cases["parallel"] = (np.concatenate([[0.0, np.pi, 1.0], triangle[3:]]), False)
+        cases["concurrent"] = (np.concatenate([triangle[:3], [0.0, 0.0, 0.0], triangle[6:]]), False)
+        cases["feasible start"] = (np.concatenate([triangle[:6], [0.0, 0.0]]), False)
+        for name, (parameters, expected) in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(bool(activity_conjecture.valid(parameters[None])[0]), expected)
+                rational = activity_conjecture.rationalise(parameters, 1000)
+                self.assertEqual(activity_conjecture.exact_general_position(*rational), expected)
+
+    def test_a_rational_unit_vector_is_unit_and_near_its_angle(self) -> None:
+        for angle in (0.0, 0.3, 1.6, 3.1, -3.1, 3.14159, -1.0):
+            u, v = activity_conjecture.rational_unit_vector(angle, 1000)
+            self.assertEqual(u * u + v * v, 1)
+            self.assertIsInstance(u, Fraction)
+            self.assertLess(abs(math.atan2(float(v), float(u)) - math.remainder(angle, 2 * math.pi)),
+                            1e-5)
+
+    def test_the_quick_study_writes_the_table_and_confirms_every_maximum(self) -> None:
+        with redirected_output() as directory, redirect_stdout(io.StringIO()):
+            results = activity_conjecture.run(quick=True, workers=1)
+            table = (directory / "tab-conjecture.tex").read_text()
+            self.assertTrue((directory / "conjecture.csv").exists())
+        self.assertEqual(len(results["rows"]), len(activity_conjecture.OBJECTIVES))
+        for row in results["rows"]:
+            self.assertEqual(row["exact_check"], "confirmed")
+        for name in activity_conjecture.COUNTS:
+            self.assertIn(activity_conjecture.COUNT_LABELS[name], table)
 
 
 from dykstra.performance_timing import read_records
