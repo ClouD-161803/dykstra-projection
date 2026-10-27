@@ -321,6 +321,34 @@ class SolverRegressionTests(unittest.TestCase):
 
         np.testing.assert_allclose(reference, np.ones(16), rtol=0.0, atol=1e-15)
 
+    def test_rounded_box_is_the_box_with_its_corners_rounded(self) -> None:
+        """rounded_box_constraints centred every corner's arc on the centre of the box,
+        where the arcs meet only for a square. A 4 by 2 box came back as the polygon around
+        the disk of radius 1, which excludes the box's own point (1.8, 0)."""
+        from edge_rounder import rounded_box_constraints
+
+        center = np.array([1.0, -0.5])
+        for width, height in ((2.0, 2.0), (4.0, 2.0), (2.0, 5.0)):
+            with self.subTest(width=width, height=height):
+                A, b = rounded_box_constraints(tuple(center), width, height, 3)
+                half = np.array([width, height]) / 2
+                radius = half.min()
+
+                def inside(point):
+                    return np.all((A * point).sum(axis=1) <= b + 1e-12)
+
+                for side in ([0.99, 0.0], [-0.99, 0.0], [0.0, 0.99], [0.0, -0.99]):
+                    self.assertTrue(inside(center + half * side), f"side point {side}")
+                # every corner's quarter circle, tangent to both of its sides, lies inside
+                for signs in ([1, 1], [-1, 1], [-1, -1], [1, -1]):
+                    signs = np.array(signs)
+                    arc_center = center + signs * (half - radius)
+                    for angle in np.linspace(0.0, np.pi / 2, 7):
+                        offset = radius * np.array([np.cos(angle), np.sin(angle)])
+                        self.assertTrue(inside(arc_center + signs * offset),
+                                        f"corner {signs.tolist()} at {angle:.2f}")
+                    self.assertFalse(inside(center + signs * half), f"corner {signs.tolist()}")
+
 
 if __name__ == "__main__":
     unittest.main()
