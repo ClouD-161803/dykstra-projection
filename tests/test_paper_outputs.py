@@ -1,5 +1,6 @@
 """Regression coverage for the write-up figure and timing scripts."""
 
+from contextlib import contextmanager
 import importlib.util
 import math
 from pathlib import Path
@@ -141,6 +142,18 @@ HAS_SCIPY = importlib.util.find_spec("scipy") is not None
 HAS_QPSOLVERS = importlib.util.find_spec("qpsolvers") is not None
 
 
+@contextmanager
+def redirected_output():
+    """Send every file the figure, table and timing scripts write to a temporary directory."""
+    original = paper_figures.OUTPUT_DIR
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        paper_figures.OUTPUT_DIR = temporary_directory
+        try:
+            yield Path(temporary_directory)
+        finally:
+            paper_figures.OUTPUT_DIR = original
+
+
 class BoundedTestPlanesTests(unittest.TestCase):
     def test_a_seed_names_the_problem_the_global_stream_draws(self) -> None:
         np.random.seed(problem_generators.problem_seed(24, 3))
@@ -217,6 +230,68 @@ class RandomTestPlanesTests(unittest.TestCase):
         self.assertFalse(test(np.array([[1.0, 0.0], [0.0, 1.0]]), np.ones(2)))
         self.assertFalse(test(np.array([[1.0], [-1.0]]), np.array([-1.0, -1.0])))
         self.assertTrue(test(np.array([[1.0], [-1.0]]), np.array([1.0, 1.0])))
+
+
+class PaperTexTests(unittest.TestCase):
+    def test_the_vertex_figure_draws_the_corners_arrows_and_floors(self) -> None:
+        geometry = paper_figures.vertex_corner_geometry()
+        for base, tip in zip(geometry["normal_bases"], geometry["normal_tips"]):
+            self.assertAlmostEqual(np.linalg.norm(tip - base), 0.28)
+        floors = geometry["floors"]
+        self.assertAlmostEqual(np.linalg.norm(np.subtract(*geometry["gamma_1"])), floors[0])
+        self.assertAlmostEqual(np.linalg.norm(np.subtract(*geometry["gamma_3"])), -floors[2])
+        text = paper_figures.vertex_corner_tikz(geometry)
+        for drawn in ("(1.6711,0.7426)", "(-1.1,1.186)", "(-1.1,-0.8785)", "(2.6,1.286)"):
+            self.assertIn(drawn, text)
+
+    def test_the_drift_figure_holds_the_phase_and_its_drift_lines(self) -> None:
+        data = paper_figures.triple_loop_drift_data()
+        np.testing.assert_allclose(data["history"][-1], [7.1552, 1.3762, 0.0], atol=5e-5)
+        np.testing.assert_allclose(data["drift"][0], [3.6451, 6.0996, 4.9899], atol=5e-5)
+        np.testing.assert_allclose(data["drift"][1], data["history"][1])
+        self.assertEqual(data["shed"], 13)
+        text = paper_figures.triple_loop_drift_pgfplots(data)
+        self.assertIn("(13,0.0000)", text)
+        self.assertIn("entered at $x = (0.9, 0.6)$", text)
+
+    def test_the_drawn_trajectory_first_reaches_zero_inside_the_bracket(self) -> None:
+        crossings = paper_figures.envelope_crossings()
+        self.assertLess(crossings["lower"], crossings["switch"])
+        self.assertLess(crossings["switch"], crossings["upper"])
+        self.assertAlmostEqual(float(paper_figures.active_trajectory(crossings["switch"])), 0.0,
+                               places=9)
+        before = np.linspace(0.0, crossings["switch"] - 1e-6, 20001)
+        self.assertTrue(np.all(paper_figures.active_trajectory(before) > 0.0))
+        lower = (paper_figures.ENVELOPE_LEVEL + paper_figures.ENVELOPE_DRIFT * crossings["lower"]
+                 - paper_figures.ENVELOPE_AMPLITUDE
+                 * paper_figures.ENVELOPE_RHO ** crossings["lower"])
+        self.assertAlmostEqual(lower, 0.0, places=9)
+        text = paper_figures.envelope_bounds_pgfplots(crossings)
+        self.assertIn("domain=0:16.022", text)
+        self.assertIn("(axis cs:3.265,", text)
+
+    def test_written_tex_names_the_command_that_produced_it(self) -> None:
+        with redirected_output() as directory:
+            path = paper_figures.save_tex("x\n", "fig-test", "python make.py")
+            self.assertEqual(Path(path).parent, directory)
+            self.assertIn("python make.py", Path(path).read_text().splitlines()[0])
+
+
+class PerformanceErrorTests(unittest.TestCase):
+    def test_the_accelerated_curve_follows_dykstra_until_it_certifies(self) -> None:
+        curves = paper_figures.error_curves(24, 8, 0, 800)
+        self.assertEqual(curves["certificate"], "kkt")
+        # The closed forms reach Dykstra's iterates up to rounding, which accumulates
+        self.assertLess(curves["path_difference"], 1e-9)
+        self.assertLess(curves["projection_error"], 1e-9)
+        self.assertEqual(curves["first_accelerated"], min(curves["settle"],
+                                                          curves["first_dykstra"]))
+        sample = paper_figures.thinned_cycles(curves, 800)
+        self.assertIn(curves["settle"] - 1, sample)
+        self.assertIn(curves["settle"], sample)
+        text = paper_figures.performance_error_pgfplots(curves, 800)
+        self.assertIn(f"settle ({curves['settle']})", text)
+        self.assertIn(f"({curves['settle']},1e-10)", text)
 
 
 if __name__ == "__main__":
