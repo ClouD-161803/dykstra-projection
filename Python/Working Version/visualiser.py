@@ -249,13 +249,13 @@ class ResultExporter:
                         break
                     try:
                         int(lines[i][0])
-                        val = lines[i][1] if lines[i][1] else None
-                        errors.append(float(val) if val else None)
+                        # export writes the NaN of a cycle that did not stall as a blank
+                        errors.append(float(lines[i][1]) if lines[i][1] else np.nan)
                     except (ValueError, IndexError):
                         break
                     i += 1
                 if errors:
-                    data['stalled_errors'] = np.array(errors, dtype=object)
+                    data['stalled_errors'] = np.array(errors)
             
             elif section_name == 'CONVERGED_ERRORS':
                 i += 1
@@ -265,13 +265,12 @@ class ResultExporter:
                         break
                     try:
                         int(lines[i][0])
-                        val = lines[i][1] if lines[i][1] else None
-                        errors.append(float(val) if val else None)
+                        errors.append(float(lines[i][1]) if lines[i][1] else np.nan)
                     except (ValueError, IndexError):
                         break
                     i += 1
                 if errors:
-                    data['converged_errors'] = np.array(errors, dtype=object)
+                    data['converged_errors'] = np.array(errors)
             
             elif section_name == 'ERRORS_FOR_PLOTTING':
                 i += 1
