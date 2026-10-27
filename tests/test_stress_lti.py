@@ -359,6 +359,90 @@ class StressTests(unittest.TestCase):
                                     (other.settled, other.cycles, other.exact_cycles, other.cycles_skipped),
                                     (plain.settled, plain.cycles, plain.exact_cycles, plain.cycles_skipped))
 
+    def test_oracle_replays_every_prefix_of_a_recorded_schedule(self) -> None:
+        # The replay enters each episode with one exact cycle and jumps the rest, so it
+        # lands on Dykstra's iterate at the end of every prefix of the schedule, a
+        # partial last episode included. The activity an LTI run records cycle by cycle
+        # is the same schedule
+        for key in RANDOM_SIZES[:7]:
+            z, A, b = random_problem(*key)
+            dykstra, _ = dykstra_reference(key, 300)
+            scale = float(np.abs(z).max())
+            schedule, recorded = record_schedule(z, A, b, 300)
+            total = sum(cycles for _, cycles in schedule)
+            np.testing.assert_allclose(recorded.projection, dykstra.path[total, -1], rtol=0.0, atol=1e-12 * scale)
+            cycle = 0
+            for index, (active, cycles) in enumerate(schedule):
+                for partial in sorted({1, max(1, cycles // 2), cycles}):
+                    with self.subTest(problem=key, episode=index, cycles=partial):
+                        replayed = oracle_lti_projection(z, A, b, schedule[:index] + [(active, partial)])
+                        np.testing.assert_allclose(replayed.projection, dykstra.path[cycle + partial, -1],
+                                                   rtol=0.0, atol=1e-9 * scale)
+                cycle += cycles
+
+            lti = LTISolver(z, A, b, max_iter=total, preset="frozen_stall", plot_active_halfspaces=True).solve()
+            if not lti.is_settled():
+                with self.subTest(problem=key, schedule="recorded by an LTI run"):
+                    columns = lti.active_half_spaces[:, 1:].T > 0.5
+                    runs = []
+                    for active in map(tuple, columns):
+                        if runs and runs[-1][0] == active:
+                            runs[-1] = (active, runs[-1][1] + 1)
+                        else:
+                            runs.append((active, 1))
+                    self.assertEqual(runs, schedule)
+
+    @unittest.skipUnless(libraries_built(), "build the C solvers first, see the README")
+    def test_c_solvers_match_the_python_at_every_budget(self) -> None:
+        # The accelerated solver follows LTIVer5Solver piece for piece: the same status,
+        # the same exact cycles and the same point and multipliers, and it reports the
+        # cycles accounted for, one fewer than the Python's settled_at when it certifies
+        # on entering an episode. Plain Dykstra in C is the Python's cycle for cycle
+        problems = {f"random {key[0]} by {key[1]}": random_problem(*key) for key in RANDOM_SIZES}
+        problems.update(degenerate_problems())
+        for case_name, (z, A, b) in problems.items():
+            norms = np.linalg.norm(A, axis=1)
+            scale = float(np.abs(z).max())
+            dykstra = DykstraProjectionSolver(z, A, b, max_iter=300, plot_errors=True).solve()
+            for budget in (1, 2, 5, 40, 300):
+                with self.subTest(case=case_name, budget=budget):
+                    solver = LTISolver(z, A, b, max_iter=budget, preset="deflated_modal")
+                    exact_cycles = spy_exact_cycles(solver)
+                    result = solver.solve()
+                    accelerated = accelerated_c_projection(z, A, b, budget)
+                    self.assertEqual(accelerated.settled, result.certificate == "kkt")
+                    self.assertEqual(accelerated.exact_cycles, len(exact_cycles))
+                    if accelerated.settled:
+                        self.assertIn(accelerated.cycles, (result.settled_at - 1, result.settled_at))
+                    else:
+                        self.assertEqual(accelerated.cycles, budget)
+                    np.testing.assert_allclose(accelerated.projection, result.projection, rtol=0.0,
+                                               atol=1e-11 * scale)
+                    np.testing.assert_allclose(accelerated.multipliers * norms, solver.y, rtol=0.0,
+                                               atol=1e-9 * max(1.0, float(np.abs(solver.y).max())))
+
+                    plain = dykstra_c_projection(z, A, b, budget)
+                    np.testing.assert_allclose(plain.projection, dykstra.path[budget, -1], rtol=0.0,
+                                               atol=1e-11 * scale)
+                    np.testing.assert_allclose(plain.multipliers[:, None] * A,
+                                               dykstra.errors_for_plotting[budget - 1], rtol=0.0,
+                                               atol=1e-11 * scale)
+
+    @unittest.skipUnless(libraries_built(), "build the C solvers first, see the README")
+    def test_c_solver_matches_the_python_on_small_structured_systems(self) -> None:
+        # Exact zeros, rows through the origin and tight degenerate vertices are where
+        # rounding decides the KKT test, so they are where the two can part
+        for index, (z, A, b, _) in enumerate(small_systems(400, 20261025)):
+            with self.subTest(system=index):
+                solver = LTISolver(z, A, b, max_iter=60, preset="deflated_modal")
+                exact_cycles = spy_exact_cycles(solver)
+                result = solver.solve()
+                accelerated = accelerated_c_projection(z, A, b, 60)
+                self.assertEqual(accelerated.settled, result.certificate == "kkt")
+                self.assertEqual(accelerated.exact_cycles, len(exact_cycles))
+                np.testing.assert_allclose(accelerated.projection, result.projection, rtol=0.0,
+                                           atol=1e-11 * max(1.0, float(np.abs(z).max())))
+
 
 if __name__ == "__main__":
     unittest.main()
