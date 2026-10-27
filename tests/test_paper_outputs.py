@@ -27,6 +27,7 @@ from lti_numerics import rigorous_deactivation_horizon
 from lti_solver import LTIVer5Solver
 import c_solvers
 import problem_generators
+import square_line_example
 from convex_projection_solver import ConvexProjectionSolver
 
 
@@ -318,6 +319,38 @@ class RunToToleranceTests(unittest.TestCase):
                                          summary["accelerated, certified"]["cycles"])
                     self.assertGreater(summary["Dykstra"]["seconds"], 0.0)
         self.assertIn("performance_timing.csv", written)
+
+
+class SquareLineExampleTests(unittest.TestCase):
+    def test_the_stall_and_its_length_match_plain_dykstra(self) -> None:
+        results = square_line_example.analyse()
+        state = results["state"]
+        self.assertEqual(state["active"], [2, 3, 6])
+        self.assertTrue(state["stationary"])
+        np.testing.assert_allclose(state["beta"][[1, 2, 5]], [-0.2, 0.4, 1 / math.sqrt(5)])
+        self.assertEqual((state["n_stall"], results["t_switch"]), (16, 17))
+        self.assertEqual((results["repeated_through"], results["leaves"]), (16, 17))
+        self.assertAlmostEqual(results["bound_first"], 18.5)
+        self.assertEqual([o["n_stall"] for o in results["omegas"].values()], [6, 16, 46, 496])
+        self.assertEqual([o["leaves"] for o in results["omegas"].values()], [7, 17, 47, 497])
+
+    def test_the_tie_from_minus_four_needs_exact_arithmetic(self) -> None:
+        results = square_line_example.analyse()
+        np.testing.assert_allclose(results["ratios_4"], [15.0, 14.0])
+        self.assertEqual((results["exact_ratio_4"], results["exact_leaves_4"],
+                          results["exact_moved_4"]), (15, 16, 17))
+        self.assertEqual((results["leaves_4"], results["moved_4"]), (17, 17))
+
+    def test_the_line_first_order_and_the_accelerated_solver(self) -> None:
+        results = square_line_example.analyse()
+        np.testing.assert_allclose(results["bauschke_corner"], [-1.0, 1.0])
+        self.assertEqual((results["bauschke"]["n_stall"], results["bauschke_count"]), (12, 12))
+        np.testing.assert_allclose(results["line_foot"], [-3.36, 2.68])
+        self.assertEqual((results["certified_at"], results["certificate"]), (2, "kkt"))
+        np.testing.assert_allclose(results["certified_point"], [0.0, 1.0], atol=1e-12)
+        self.assertEqual(results["trace_without_kkt"][:5],
+                         ["run exactly 1", "evaluated 2", "jumped over 3-15", "evaluated 16",
+                          "run exactly 17"])
 
 
 if __name__ == "__main__":
