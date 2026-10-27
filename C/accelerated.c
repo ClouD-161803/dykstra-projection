@@ -332,7 +332,7 @@ typedef struct {
     int *krows, *ksup, *ktight, *ksub;
 
     int *ipiv;
-    unsigned char *active;
+    unsigned char *active, *coupled;
     accelerated_info info;
 } accelerated_ws;
 
@@ -1008,14 +1008,16 @@ static void dykstra_cycle(accelerated_ws *w)
 /* Am and Bm carry a cycle's start to its end; row m of R and svec gives the
  * increment of auxiliary m over a cycle.  Rs and ss hold the magnitudes R and
  * svec are summed from: for a half-space that repeats the last active one
- * before it R_m cancels to rounding, and the floors must not shrink with it. */
+ * before it R_m cancels to rounding, and the floors must not shrink with it.
+ * coupled marks the coordinates an active normal touches, which a cycle mixes
+ * into one another. */
 static void build_cycle_map(accelerated_ws *w)
 {
     const int n = w->n, p = w->p;
     double *P = w->Am, *q = w->Bm;
     for (int i = 0; i < p; ++i)
         for (int j = 0; j < p; ++j) P[(size_t)i * p + j] = (i == j) ? 1.0 : 0.0;
-    for (int k = 0; k < p; ++k) q[k] = 0.0;
+    for (int k = 0; k < p; ++k) { q[k] = 0.0; w->coupled[k] = 0; }
 
     double *tmp = w->pw1;
     for (int m = 0; m < n; ++m) {
@@ -1035,6 +1037,8 @@ static void build_cycle_map(accelerated_ws *w)
         w->svec[m] = dot(a, q, p) - b;
         w->ss[m] = absdot(a, q, p) + fabs(b);
         if (w->active[m]) {
+            for (int k = 0; k < p; ++k)
+                if (a[k] != 0.0) w->coupled[k] = 1;
 
             for (int k = 0; k < p; ++k) tmp[k] = 0.0;
             for (int j = 0; j < p; ++j) {
@@ -1427,14 +1431,26 @@ static int fast_forward_jump(accelerated_ws *w, int t, double *u, int cyc)
 }
 
 /* Fixed to rounding, coordinate by coordinate: holding a state that still
- * moves, however slowly, would leave Dykstra's path. */
+ * moves, however slowly, would leave Dykstra's path.  A cycle mixes the
+ * coordinates its active normals touch, so its rounding there is on the scale
+ * of the largest of them, and a small coordinate beside larger ones turned into
+ * it is charged with theirs.  A coordinate no active normal touches does not
+ * move at all. */
 static int is_frozen(const accelerated_ws *w)
 {
     const int p = w->p;
+    double shared = 0.0;
+    for (int k = 0; k < p; ++k) {
+        if (!w->coupled[k]) continue;
+        const double scale = absdot(w->Am + (size_t)k * p, w->x, p) + fabs(w->Bm[k])
+                           + fabs(w->x[k]);
+        if (scale > shared) shared = scale;
+    }
     for (int k = 0; k < p; ++k) {
         const double *Ak = w->Am + (size_t)k * p;
         const double motion = fabs(dot(Ak, w->x, p) + w->Bm[k] - w->x[k]);
-        const double scale = absdot(Ak, w->x, p) + fabs(w->Bm[k]) + fabs(w->x[k]);
+        const double scale = w->coupled[k] ? shared
+                           : absdot(Ak, w->x, p) + fabs(w->Bm[k]) + fabs(w->x[k]);
         if (!(motion <= rounding_floor(scale))) return 0;
     }
     return 1;
@@ -1786,7 +1802,7 @@ static int solve_impl(int n_planes, int dim,
     const size_t ni = 3 * mx + 8 * n + p + KKT_EXHAUSTIVE;
     double *arena = (double *)malloc(nd * sizeof(double));
     int *iarena = (int *)malloc(ni * sizeof(int));
-    unsigned char *barena = (unsigned char *)malloc(3 * n);
+    unsigned char *barena = (unsigned char *)malloc(3 * n + p);
     if (!arena || !iarena || !barena) {
         free(arena); free(iarena); free(barena);
         return ACCELERATED_ERR_ALLOC;
@@ -1807,6 +1823,7 @@ static int solve_impl(int n_planes, int dim,
     w.active = barena;
     w.nnpass = barena + n;
     w.nnpprev = barena + 2 * n;
+    w.coupled = barena + 3 * n;
     w.z = z;
 
     int status = -1000;

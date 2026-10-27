@@ -34,9 +34,10 @@ _KKT_ACCURACY = 1e-9
 # The cycle map of an episode: A_m and B_m carry a cycle's start to its end, row m of
 # R and s gives the increment R_m x + s_m of auxiliary m over a cycle from x, R_scale
 # and s_scale hold the magnitudes R and s are computed from, span is an orthonormal
-# basis of the active normals, the only directions a cycle moves, and touched marks
-# the coordinates some constraint touches
-CycleMap = namedtuple("CycleMap", "active A_m B_m R R_scale s s_scale span touched")
+# basis of the active normals, the only directions a cycle moves, touched marks the
+# coordinates some constraint touches, and coupled those an active normal touches,
+# which a cycle mixes into one another
+CycleMap = namedtuple("CycleMap", "active A_m B_m R R_scale s s_scale span touched coupled")
 
 # Constants of one episode's closed form: its fixed point x_inf, RIA = R (I - A_m)^-1
 # and the magnitudes RIA_scale its rounding comes from, the levels G and drifts beta
@@ -129,7 +130,7 @@ def cycle_map(unit_A: np.ndarray, unit_b: np.ndarray, active: tuple) -> CycleMap
         span = U[:, sigma > 1e-12 * sigma[0]]
         span[~touched] = 0.0
     return CycleMap(active=tuple(active), A_m=P, B_m=q, R=R, R_scale=R_scale, s=s, s_scale=s_scale,
-                    span=span, touched=touched)
+                    span=span, touched=touched, coupled=np.any(unit_A[rows] != 0.0, axis=0))
 
 
 def touched_resolvent(cmap: CycleMap) -> np.ndarray:
@@ -166,9 +167,16 @@ def predicted_activity(cmap: CycleMap, x: np.ndarray, y: np.ndarray) -> tuple:
 def is_frozen(cmap: CycleMap, x: np.ndarray) -> bool:
     """Cycle leaves the state unchanged."""
     # Fixed to rounding, coordinate by coordinate: holding a state that still moves,
-    # however slowly, would leave Dykstra's path
+    # however slowly, would leave Dykstra's path. A cycle mixes the coordinates its active
+    # normals touch, so its rounding there is on the scale of the largest of them, and a small
+    # coordinate beside larger ones turned into it is charged with theirs. A coordinate no
+    # active normal touches does not move at all
+    abs_x = np.abs(x)
     motion = np.abs(cmap.A_m @ x + cmap.B_m - x)
-    return bool(np.all(motion <= rounding_floor(np.abs(cmap.A_m) @ np.abs(x) + np.abs(cmap.B_m) + np.abs(x))))
+    magnitude = np.abs(cmap.A_m) @ abs_x + np.abs(cmap.B_m) + abs_x
+    if cmap.coupled.any():
+        magnitude[cmap.coupled] = magnitude[cmap.coupled].max()
+    return bool(np.all(motion <= rounding_floor(magnitude)))
 
 
 def _closed_form(cmap: CycleMap, x: np.ndarray, y: np.ndarray, x_inf: np.ndarray,
