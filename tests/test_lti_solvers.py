@@ -1322,6 +1322,21 @@ class LTISolverRegressionTests(unittest.TestCase):
         self.assertTrue(np.all(multipliers >= 0.0))
         np.testing.assert_allclose(z - N.T @ multipliers, projection, rtol=0.0, atol=1e-12)
 
+    def test_nonnegative_quadratic_keeps_the_minimiser_of_an_ill_conditioned_support(self) -> None:
+        # The support rows 0, 2 and 4 of this dual are independent but nearly dependent,
+        # so the residual of their least-squares solve exceeds a componentwise rounding
+        # floor. Reading that residual as a direction of unbounded descent, rather than
+        # trusting the rank least squares reports, stepped along rounding and stopped
+        # 5.6 away from the projection
+        raw = np.array([[0.0, -1.0, 0.5, 1.5], [0.0, -0.5, -0.5, 0.0], [-0.5, 0.0, 1.0, -0.5],
+                        [-1.0, 0.0, 0.0, 0.5], [1.0, 0.5, -0.5, 0.5]])
+        N = raw / np.linalg.norm(raw, axis=1)[:, None]
+        z = np.array([4.5, 3.5, 6.5, 0.5])
+        b = N @ np.array([0.0, -1.5, -1.0, 0.0]) + np.array([1.0, 0.5, 0.5, 0.5, 0.25])
+        multipliers = nonnegative_quadratic(N @ N.T, N @ z - b)
+        projection = DykstraProjectionSolver(z, N, b, max_iter=0).actual_projection
+        np.testing.assert_allclose(z - N.T @ multipliers, projection, rtol=0.0, atol=1e-12)
+
     def test_nonnegative_quadratic_keeps_a_small_positive_gradient_beside_a_large_one(self) -> None:
         # A noise threshold scaled by the largest entry of c let it hide a small positive
         # gradient
