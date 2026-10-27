@@ -266,6 +266,25 @@ class SolverRegressionTests(unittest.TestCase):
                 self.assertEqual([w.category for w in caught], [DeprecationWarning])
                 self.assertEqual(Path(caught[0].filename).resolve(), Path(__file__).resolve())
 
+    def test_solving_twice_gives_the_same_result(self) -> None:
+        """A second solve() continued from the first one's final state, wrote its history
+        into the arrays the first result held, and returned a different projection."""
+        z = np.array([-2.0, 1.4])
+        fields = ("projection", "path", "squared_errors", "stalled_errors",
+                  "errors_for_plotting", "active_half_spaces")
+        for solver_type in (DykstraProjectionSolver, DykstraMapHybridSolver,
+                            DykstraStallDetectionSolver):
+            with self.subTest(solver=solver_type.__name__):
+                solver = solver_type(z, BOX_LINE_A, BOX_LINE_B, 5, track_error=True,
+                                     plot_errors=True, plot_active_halfspaces=True)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    first = solver.solve()
+                    kept = {name: getattr(first, name).copy() for name in fields}
+                    second = solver.solve()
+                for name, value in kept.items():
+                    np.testing.assert_array_equal(getattr(first, name), value, err_msg=name)
+                    np.testing.assert_array_equal(getattr(second, name), value, err_msg=name)
+
 
 if __name__ == "__main__":
     unittest.main()
