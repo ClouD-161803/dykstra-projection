@@ -1,12 +1,15 @@
 """Rebuild the figures of the SIAM paper from this repository.
 
-Run from this folder with `python paper_figures.py`. Each figure is written to results/paper
-beside this script as a PNG and a PDF, and the figures the paper draws inline are also
-written as the TikZ or pgfplots code that SIAMPaper.tex holds, fig-<label>.tex, ready to
-paste in place. The numbers the figures rest on are printed.
+Run from this folder with `python paper_figures.py`, or with `--quick` for a short
+performance figure written to a temporary directory. Each figure is written to
+results/paper beside this script as a PNG and a PDF, and the figures the paper draws
+inline are also written as the TikZ or pgfplots code that SIAMPaper.tex holds,
+fig-<label>.tex, ready to paste in place. The numbers the figures rest on are printed.
 """
 
+import argparse
 import os
+import tempfile
 import warnings
 
 import numpy as np
@@ -47,6 +50,9 @@ PERFORMANCE_SIZE, PERFORMANCE_INDEX, PERFORMANCE_CYCLES = (96, 32), 3, 6000
 PERFORMANCE_TOLERANCE, PERFORMANCE_FLOOR = 1e-3, 1e-10
 # The first cycle of the thinned curves is a multiple of the budget over this count
 PERFORMANCE_POINTS = 260
+# Under --quick, chosen here: the performance figure's budget, and the problems and budget of
+# the summary of its tier
+QUICK_CYCLES, QUICK_INDICES = 200, range(1)
 
 
 def quiet_accelerate_warnings() -> None:
@@ -769,16 +775,34 @@ def performance_seed_summary(indices: range = range(5), cycles: int = 20000) -> 
     return rows
 
 
-def run() -> None:
+def run(quick: bool = False) -> None:
     """Rebuild every figure and the LaTeX of those the paper draws inline."""
     quiet_accelerate_warnings()
+    cycles = QUICK_CYCLES if quick else PERFORMANCE_CYCLES
     save_tex(vertex_corner_tikz(vertex_gamma_corner_figure()), "fig-vertexcorner")
     save_tex(triple_loop_drift_pgfplots(triple_loop_drift_figure()), "fig-ykdrift")
     save_tex(envelope_bounds_pgfplots(envelope_bounds_figure()), "fig-envelopes")
-    save_tex(performance_error_pgfplots(performance_error_figure(), PERFORMANCE_CYCLES),
+    save_tex(performance_error_pgfplots(performance_error_figure(cycles=cycles), cycles),
              "fig-performance-left")
-    performance_seed_summary()
+    if quick:
+        performance_seed_summary(QUICK_INDICES, QUICK_CYCLES)
+    else:
+        performance_seed_summary()
+    print(f"Finished: vertex_gamma_corner, triple_loop_drift, envelope_bounds and "
+          f"performance_error as PNG and PDF, and their fig-*.tex files, in {OUTPUT_DIR}")
+
+
+def main() -> None:
+    """Parse the command line and run."""
+    global OUTPUT_DIR
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--quick", action="store_true",
+                        help="a short performance figure written to a temporary directory")
+    args = parser.parse_args()
+    if args.quick:
+        OUTPUT_DIR = tempfile.mkdtemp(prefix="paper_figures_")
+    run(args.quick)
 
 
 if __name__ == "__main__":
-    run()
+    main()
