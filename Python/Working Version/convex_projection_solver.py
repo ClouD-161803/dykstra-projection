@@ -569,6 +569,9 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
     def __init__(self, *args, **kwargs):
         """Initialise the stall detection solver with additional tracking."""
         super().__init__(*args, **kwargs)
+        norms = np.linalg.norm(self.A, axis=1)
+        self.unit_A = self.A / norms[:, None]
+        self.unit_b = self.b / norms
         self.stalling = False
         self.k_stalling = 1
         self.m_stalling = None
@@ -580,6 +583,14 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
     def _rounding_floor(cls, magnitude):
         """Returns the rounding allowed in a quantity summed from terms of this magnitude."""
         return cls.ROUNDING_UNITS * np.finfo(float).eps * magnitude
+
+    def _output_floor(self, m: int, x_temp: np.ndarray, correction: np.ndarray) -> np.ndarray:
+        """Returns, per coordinate, the rounding allowed in the output of the visit to
+        half-space m from x_temp with the given correction."""
+        magnitude = np.abs(x_temp) + np.abs(correction)
+        # bounds the length of the projection's step along the unit normal
+        step_bound = np.dot(np.abs(self.unit_A[m]), magnitude) + abs(self.unit_b[m])
+        return self._rounding_floor(magnitude + np.abs(self.unit_A[m]) * step_bound)
 
     def _update_error(self, m: int, x_temp: np.ndarray, x: np.ndarray, index: int) -> None:
         """
@@ -617,14 +628,15 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
         # The frozen window's outputs; entry m - 1 is the input to half-space m.
         visits = self.x_historical[i]
         cycles_to_switch = np.inf
-        for m, (normal, offset) in enumerate(zip(self.A, self.b)):
+        for m in range(self.n):
             if not self.active_at_last_visit[m]:
                 # One that has just turned inactive moved its input by its old
                 # e_m, and the next cycle will not repeat that.
-                if not np.array_equal(visits[m], visits[m - 1]):
+                moved = np.abs(visits[m] - visits[m - 1])
+                if np.any(moved > self._rounding_floor(np.abs(visits[m]) + np.abs(visits[m - 1]))):
                     return
                 continue
-            unit_normal, constant_offset = self._normalise(normal, offset)
+            unit_normal, constant_offset = self.unit_A[m], self.unit_b[m]
             slack = np.dot(visits[m - 1], unit_normal) - constant_offset
             if slack < 0:
                 slack_floor = self._rounding_floor(
@@ -642,7 +654,8 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
 
         print(f"Fast forwarding {n_fast_forward} rounds to exit stalling at iteration {i}. ")
 
-        # Inactive half-spaces pass their input through, so they gain nothing.
+        # Inactive half-spaces pass their input through, so they gain nothing
+        # beyond rounding.
         for m, (normal, offset) in enumerate(zip(self.A, self.b)):
             self.e[m] = self.e[m] + n_fast_forward * (visits[m - 1] - visits[m])
             if not self._is_in_half_space(self.x + self.e[(m - self.n) % self.n], normal, offset):
@@ -678,7 +691,8 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
                 self.active_at_last_visit[m] = self._check_activity(
                     m, i, x_temp, normal, offset, index)
 
-                # Update x_m+1
+                # Update x_m+1. Its rounding floor needs e_m before the update.
+                output_floor = self._output_floor(m, x_temp, self.e[index])
                 self.x = self._project_onto_half_space(x_temp + self.e[index], normal, offset)
 
                 # Update e_m
@@ -688,9 +702,12 @@ class DykstraStallDetectionSolver(ConvexProjectionSolver):
                 self.x_historical[i + 1][m] = self.x.copy()
 
                 # Stalling as in Definition 1: the last n visits all repeat their
-                # outputs from one cycle earlier. A single repeating visit is not
-                # enough; a partly frozen cycle fed jumps plain Dykstra never makes.
-                if i > 0 and np.array_equal(self.x_historical[i + 1][m], self.x_historical[i][m]):
+                # outputs from one cycle earlier, to within the rounding of the visit,
+                # which no scale of the problem changes. A single repeating visit is
+                # not enough, since a partly frozen cycle fed jumps that plain Dykstra
+                # never makes.
+                if i > 0 and np.all(np.abs(self.x_historical[i + 1][m] - self.x_historical[i][m])
+                                    <= output_floor):
                     self.frozen_visits += 1
                 else:
                     self.frozen_visits = 0
