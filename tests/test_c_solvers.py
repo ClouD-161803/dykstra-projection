@@ -329,6 +329,20 @@ class CScheduleTests(unittest.TestCase):
                                                   schedule="never")
                 self.assertEqual((result.settled, result.cycles), (False, max_iter))
 
+    def test_a_phase_entry_runs_few_power_iterations(self) -> None:
+        # The norm of I - A_m decides only the type of a phase, which the Frobenius norm settles
+        # unless it straddles the cutoff, and the contraction rate serves only envelope jumps,
+        # which most phases never try. Computed at every entry, the two took 758 to 833 power
+        # iterations of 4 p^2 flops per phase at the three largest tiers
+        for num_planes, num_dimensions in ((96, 32), (160, 48)):
+            per_entry = []
+            for index in range(5):
+                z, A, b = tier_problem(num_planes, num_dimensions, index)
+                result = accelerated_c_projection(z, A, b, 20000)
+                per_entry.append(result.power_iterations / result.exact_cycles)
+            with self.subTest(tier=f"{num_planes} x {num_dimensions}"):
+                self.assertLess(float(np.median(per_entry)), 100.0)
+
     def test_schedule_is_one_of_four(self) -> None:
         z, A, b = box_line_problem()
         for schedule in ("Work", 1, None):
