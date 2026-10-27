@@ -388,12 +388,17 @@ class LTISolver(ConvexProjectionSolver):
         active = self.cmap.active
         x = self.x_historical[cycle - 1][-1].copy()
         y = np.where(active, self._recorded_y, 0.0)
-        for m in range(self.n):
-            if active[m]:
-                slack = float(self.unit_A[m] @ x) - self.unit_b[m]
-                x = x - slack * self.unit_A[m]
-                y[m] += slack
-            self.x_historical[cycle][m] = x
+        row = self.x_historical[cycle]
+        start = 0
+        # The inactive half-spaces between two active ones all store the same point
+        for m in np.flatnonzero(active):
+            row[start:m] = x
+            slack = float(self.unit_A[m] @ x) - self.unit_b[m]
+            x = x - slack * self.unit_A[m]
+            y[m] += slack
+            row[m] = x
+            start = m + 1
+        row[start:] = x
         self._recorded_y = y
         if self.plot_errors:
             self.errors_for_plotting[cycle - 1] = y[:, None] * self.unit_A
