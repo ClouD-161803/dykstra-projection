@@ -178,3 +178,179 @@ def median(records: list[dict], key: str) -> float:
 def number(value: float) -> str:
     """A median as the table prints it, with a half where it falls between two problems."""
     return f"{value:.0f}" if float(value).is_integer() else f"{value:.1f}"
+
+
+def summary_rows(records: list[dict]) -> list[dict]:
+    """One row per wedge cell, stall tier and dense tier, of medians over its problems."""
+    rows = []
+    for row in dict.fromkeys(record["row"] for record in records):
+        group = [record for record in records if record["row"] == row]
+        ended = {}
+        for record in group:
+            ended[record["ended_by"]] = ended.get(record["ended_by"], 0) + 1
+        rows.append({
+            "row": row, "problems": len(group),
+            "dykstra_reached": sum(record["dykstra_reached"] for record in group),
+            **{key: median(group, key) for key in (
+                "dykstra_first_within", "accelerated_first_within", "exact_cycles",
+                "evaluated_cycles", "envelope_skipped_cycles", "stall_skipped_cycles",
+                "stall_fast_forwards", "budget_skipped_cycles", "c_dykstra_ms",
+                "c_accelerated_ms")},
+            "first_within_equal": sum(record["dykstra_first_within"]
+                                      == record["accelerated_first_within"] for record in group),
+            "largest_relative_deviation": max(record["largest_relative_deviation"]
+                                              for record in group),
+            "largest_c_deviation": max(record["c_deviation"] for record in group),
+            "settled": sum(record["settled"] or record["c_settled"] for record in group),
+            "ended_by": "; ".join(f"{rule} {count}" for rule, count in ended.items())})
+    return rows
+
+
+def compaction_table(rows: list[dict]) -> str:
+    """The rows of tab-compaction-only.tex, headed by a comment naming every column."""
+    lines = ["% under the schedule never, per wedge cell, stall tier and dense tier: problems; the "
+             "median cycle at which Dykstra and the accelerated solver reach squared error "
+             f"{TOLERANCE:g}; the median exact cycles, cycles evaluated one by one, cycles skipped "
+             "by envelope jumps, cycles skipped by stall fast-forwards, fast-forwards, and cycles "
+             "skipped by the jump to the budget; the median C times of Dykstra and of the "
+             "accelerated solver at Dykstra's budget; the largest deviation of the accelerated "
+             "iterate from Dykstra's at the same cycle over the run, relative to the largest "
+             "coordinate of z; and the rule that ended the runs\n"]
+    for row in rows:
+        lines.append(
+            f"  {row['row']:<28} & {row['problems']} & ${number(row['dykstra_first_within'])}$ & "
+            f"${number(row['accelerated_first_within'])}$ & ${number(row['exact_cycles'])}$ & "
+            f"${number(row['evaluated_cycles'])}$ & ${number(row['envelope_skipped_cycles'])}$ & "
+            f"${number(row['stall_skipped_cycles'])}$ & ${number(row['stall_fast_forwards'])}$ & "
+            f"${number(row['budget_skipped_cycles'])}$ & "
+            f"${performance_timing.format_ms(row['c_dykstra_ms'] / 1000.0)}$ ms & "
+            f"${performance_timing.format_ms(row['c_accelerated_ms'] / 1000.0)}$ ms & "
+            f"${row['largest_relative_deviation']:.1e}$ & {row['ended_by']} \\\\\n")
+    return "".join(lines)
+
+
+def stall_length(p: int) -> dict:
+    """The closed-form stall length of one stall instance against plain Dykstra's run."""
+    seed = STALL_SEED + 1000 * p + STALL_CHECK_INDEX
+    A, b, z = BoxSlabTestPlanes(p).problem(seed)
+    x, y = dykstra_cycles(z, A, b, 1)[1][:2]
+    state = stalling_state(A, b, x, y)
+    n_stall, m_switch = state["n_stall"], state["m_switch"]
+    horizon = 1 + n_stall + STALL_CHECK_MARGIN
+    states = dykstra_cycles(z, A, b, horizon)
+    reference = ConvexProjectionSolver._find_optimal_solution(z, A, b)
+    batch = stall_grid.run_batch(z[None], A[None], b[None], reference[None], horizon)
+    periods = batch["relative_period_lengths"][0]
+    # the states after cycles 1 to stationary_through coincide
+    stationary_through = first_moved_cycle(states, np.array(state["points"][1:]), 1) - 1
+    leaves = first_inactive_cycle(states, m_switch, 1)
+    active = np.array(state["active"]) - 1
+    return {"p": p, "seed": seed, "n_stall": n_stall, "m_switch": m_switch,
+            "t_switch": 1 + n_stall, "stationary_through": stationary_through,
+            "switch_half_space_leaves": leaves,
+            "relative_period": periods[0] if periods else 0,
+            "relative_stalling_cycles": int(batch["relative_cycles"][0]),
+            "matches": stationary_through == n_stall and leaves == 1 + n_stall,
+            "entry_state": " ".join(f"{v:.6g}" for v in x),
+            "active": " ".join(str(m) for m in state["active"]),
+            "auxiliaries": " ".join(f"{y[m]:.6g}" for m in active),
+            "slacks": " ".join(f"{state['beta'][m]:.6g}" for m in active),
+            "ratios": " ".join(f"{m}: {r:.6g}" for m, r in state["ratios"].items())}
+
+
+def stall_length_table(rows: list[dict]) -> str:
+    """The rows of tab-stall-length.tex, headed by a comment naming every column."""
+    lines = ["% per stall tier, problem "
+             f"{STALL_CHECK_INDEX} of benchmark.py's stall family from the state after cycle 1: "
+             "p; the seed; N_stall = min over the draining half-spaces of ceil(y_m / -beta_m); "
+             "m_switch; t_switch = 1 + N_stall; the last cycle after which plain Dykstra's state "
+             "repeats that state; the cycle in which half-space m_switch leaves the active set; "
+             "and the stalling period the relative detector of stall_grid.py finds, which counts "
+             "cycles 2 to N_stall\n"]
+    for row in rows:
+        lines.append(f"  ${row['p']}$ & ${row['seed']}$ & ${row['n_stall']}$ & ${row['m_switch']}$ & "
+                     f"${row['t_switch']}$ & ${row['stationary_through']}$ & "
+                     f"${row['switch_half_space_leaves']}$ & ${row['relative_period']}$ \\\\\n")
+    return "".join(lines)
+
+
+def write_csv(rows: list[dict], name: str) -> str:
+    """Write rows as CSV in the output folder and return the path."""
+    os.makedirs(paper_figures.OUTPUT_DIR, exist_ok=True)
+    path = os.path.join(paper_figures.OUTPUT_DIR, name + ".csv")
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Wrote {path}")
+    return path
+
+
+def run(wedge_cells: tuple = WEDGE_CELLS, stall_dimensions: tuple = STALL_DIMENSIONS,
+        dense_tiers: tuple = DENSE_TIERS, problems: int = PROBLEMS, workers: int = WORKERS,
+        command: str = "python -m dykstra.compaction_only") -> tuple[list[dict], list[dict]]:
+    """Run the study and the stall-length check, print every number and write the outputs."""
+    specs = problem_list(wedge_cells, stall_dimensions, dense_tiers, problems)
+    if workers > 1:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            analysed = list(pool.map(analyse, specs))
+    else:
+        analysed = [analyse(spec) for spec in specs]
+    # the times are taken one after the other in this process, after the parallel part
+    records = [time_in_c(record) for record in analysed]
+    for record in records:
+        print(f"{record['row']} problem {record['index']}: budget {record['budget']}, first within "
+              f"{record['dykstra_first_within']} and {record['accelerated_first_within']}, exact "
+              f"{record['exact_cycles']}, evaluated {record['evaluated_cycles']}, skipped by "
+              f"envelope {record['envelope_skipped_cycles']}, by stall {record['stall_skipped_cycles']} "
+              f"in {record['stall_fast_forwards']}, by the budget jump {record['budget_skipped_cycles']}, "
+              f"largest deviation {record['largest_deviation']:.3e} "
+              f"({record['largest_relative_deviation']:.3e} of max |z|), C deviation "
+              f"{record['c_deviation']:.3e}, ended by {record['ended_by']}")
+    if any(record["settled"] or record["c_settled"] for record in records):
+        raise RuntimeError("A run under the schedule never settled.")
+    write_csv(records, "compaction_only")
+    rows = summary_rows(records)
+    save_tex(compaction_table(rows), "tab-compaction-only", command)
+    for row in rows:
+        print(f"{row['row']}: {row}")
+    checks = [stall_length(p) for p in stall_dimensions]
+    for check in checks:
+        print(f"stall check p = {check['p']}, seed {check['seed']}: entry state {check['entry_state']}, "
+              f"active {check['active']}, auxiliaries {check['auxiliaries']}, slacks {check['slacks']}, "
+              f"ratios {check['ratios']}; N_stall {check['n_stall']}, m_switch {check['m_switch']}, "
+              f"t_switch {check['t_switch']}; Dykstra stationary through cycle "
+              f"{check['stationary_through']}, m_switch leaves in cycle "
+              f"{check['switch_half_space_leaves']}, relative period {check['relative_period']} "
+              f"cycles; matches {check['matches']}")
+    write_csv(checks, "stall_length")
+    save_tex(stall_length_table(checks), "tab-stall-length", command)
+    return records, checks
+
+
+def main() -> None:
+    """Parse the command line and run."""
+    global REPEATS
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--quick", action="store_true",
+                        help="one problem of one cell per family and one run per time, written to "
+                             "a temporary directory")
+    parser.add_argument("--workers", type=int, default=WORKERS)
+    args = parser.parse_args()
+    quiet_accelerate_warnings()
+    command = " ".join(["python -m dykstra.compaction_only", *sys.argv[1:]])
+    began = time.perf_counter()
+    if args.quick:
+        REPEATS = 1
+        paper_figures.OUTPUT_DIR = tempfile.mkdtemp(prefix="compaction_only_")
+        run(QUICK_WEDGE_CELLS, QUICK_STALL_DIMENSIONS, QUICK_DENSE_TIERS, QUICK_PROBLEMS,
+            args.workers, command)
+    else:
+        run(workers=args.workers, command=command)
+    print(f"Finished in {time.perf_counter() - began:.0f} s: tab-compaction-only.tex, "
+          f"compaction_only.csv, tab-stall-length.tex and stall_length.csv in "
+          f"{paper_figures.OUTPUT_DIR}")
+
+
+if __name__ == "__main__":
+    main()
