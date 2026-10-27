@@ -127,6 +127,26 @@ class CSolverTests(unittest.TestCase):
                 np.testing.assert_allclose(lifted.projection[:2], plain.projection, rtol=0.0, atol=1e-12)
                 self.assertEqual(lifted.projection[2], extra)
 
+    def test_an_untouched_coordinate_does_not_change_the_settlement(self) -> None:
+        # Every episode of this problem is regular in the plane. A coordinate no constraint
+        # touches once made I - A_m singular, so the solver took its deflated path and
+        # settled after 1 cycle, where the plane settles after 5
+        z = np.array([-1.75, -1.5])
+        A = np.array([[-0.5, -1.0], [0.5, -0.25], [-0.5, -0.25]])
+        b = np.array([0.375, 0.1875, -0.0625])
+        plain = accelerated_c_projection(z, A, b, 200)
+        self.assertTrue(plain.settled)
+        for position in (0, 2):
+            with self.subTest(position=position):
+                lifted = accelerated_c_projection(np.insert(z, position, 1e8),
+                                                  np.insert(A, position, 0.0, axis=1), b, 200)
+                self.assertEqual((lifted.settled, lifted.cycles, lifted.exact_cycles, lifted.cycles_skipped),
+                                 (plain.settled, plain.cycles, plain.exact_cycles, plain.cycles_skipped))
+                np.testing.assert_allclose(np.delete(lifted.projection, position), plain.projection,
+                                           rtol=0.0, atol=1e-12)
+                np.testing.assert_allclose(lifted.multipliers, plain.multipliers, rtol=0.0, atol=1e-12)
+                self.assertEqual(lifted.projection[position], 1e8)
+
     def test_the_result_scales_with_the_problem(self) -> None:
         for z, A, b in [box_line_problem()] + bounded_problems()[:2]:
             for max_iter in (5, 400):

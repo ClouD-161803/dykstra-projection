@@ -1337,6 +1337,30 @@ class LTISolverRegressionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "max_iter"):
                     record_schedule(z, A, b, max_iter)
 
+    def test_untouched_coordinate_does_not_change_the_settlement(self) -> None:
+        # Every episode of this problem is regular in the plane. A coordinate no constraint
+        # touches once made I - A_m singular, so the closed_form to frozen_stall presets
+        # stepped every episode and never settled, where the plane settles by finality on
+        # cycle 7, and deflated_modal took its deflated path and settled on cycle 2, not 6.
+        # Placed first, the coordinate also met the SVD that builds the span of the active
+        # normals, which left rounding in its row, so stepping moved a value of 0 to -4e-16
+        z = np.array([-1.75, -1.5])
+        A = np.array([[-0.5, -1.0], [0.5, -0.25], [-0.5, -0.25]])
+        b = np.array([0.375, 0.1875, -0.0625])
+        for solver_type in LTI_SOLVERS:
+            plain = solver_type(z, A, b, max_iter=200, plot_active_halfspaces=True).solve()
+            self.assertEqual(plain.certificate is None, solver_type is LTIVer1Solver)
+            for position in (0, 2):
+                for value in (1e8, 0.0):
+                    with self.subTest(solver=solver_type.__name__, position=position, value=value):
+                        lifted = solver_type(np.insert(z, position, value), np.insert(A, position, 0.0, axis=1),
+                                             b, max_iter=200, plot_active_halfspaces=True).solve()
+                        self.assertEqual(lifted.settled_at, plain.settled_at)
+                        self.assertEqual(lifted.certificate, plain.certificate)
+                        np.testing.assert_array_equal(lifted.active_half_spaces, plain.active_half_spaces)
+                        np.testing.assert_allclose(np.delete(lifted.projection, position), plain.projection,
+                                                   rtol=0.0, atol=1e-12)
+                        self.assertEqual(lifted.projection[position], value)
 
 if __name__ == "__main__":
     unittest.main()
