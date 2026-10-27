@@ -717,5 +717,58 @@ class WedgeFamilyTests(unittest.TestCase):
             self.assertIs(getattr(stall_angles, name), getattr(problem_generators, name))
 
 
+class BoxSlabFamilyTests(unittest.TestCase):
+    def test_the_slab_cuts_off_the_vertex_beyond_which_the_start_lies(self) -> None:
+        for p in (2, 4, 8):
+            with self.subTest(p=p):
+                A, b, z = problem_generators.BoxSlabTestPlanes(p).problem(p)
+                box, slab = A[:2 * p], A[2 * p:]
+                np.testing.assert_allclose(box[0::2] @ box[0::2].T, np.eye(p), rtol=0.0,
+                                           atol=1e-12)
+                np.testing.assert_array_equal(box[1::2], -box[0::2])
+                np.testing.assert_array_equal(slab[1], -slab[0])
+                width = np.linalg.norm(slab[0])
+                self.assertAlmostEqual((b[-2] + b[-1]) / width, problem_generators.SLAB_WIDTH)
+                # the start lies beyond one face of every pair, by the range of the family
+                violated = A[:2 * p] @ z - b[:2 * p]
+                faces = np.where(violated[0::2] > 0, np.arange(0, 2 * p, 2),
+                                 np.arange(1, 2 * p, 2))
+                beyond = violated[faces]
+                low, high = problem_generators.START_BEYOND_RANGE
+                self.assertTrue(np.all((low <= beyond) & (beyond <= high)))
+                # the vertex on those faces lies beyond the slab's near side by the gap's range
+                vertex = np.linalg.solve(A[faces], b[faces])
+                gap = (A[-1] @ vertex - b[-1]) / width
+                self.assertTrue(problem_generators.SLAB_GAP_RANGE[0] <= gap
+                                <= problem_generators.SLAB_GAP_RANGE[1])
+                inside = ConvexProjectionSolver._find_optimal_solution(z, A, b)
+                self.assertTrue(np.all(A @ inside <= b + 1e-9 * (1.0 + np.abs(b))))
+
+    def test_every_stall_problem_of_the_benchmark_stalls_and_no_wedge_problem_does(self) -> None:
+        for family, horizon in (("stall", 40), ("wedge", 300)):
+            for tier in benchmark.FAMILY_TIERS[family]:
+                for index in range(benchmark.SEEDS):
+                    A, b, z, seed = benchmark.family_problem(family, tier, index)
+                    record = batch_record(z, A, b, horizon)
+                    for detector in stall_grid.DETECTORS:
+                        with self.subTest(seed=seed, detector=detector):
+                            stalled = record[f"stalling_cycles_{detector}"] > 0
+                            self.assertEqual(stalled, family == "stall")
+
+    def test_a_seed_names_one_problem_and_one_dimension_is_refused(self) -> None:
+        family = problem_generators.BoxSlabTestPlanes(4)
+        first, second = family.problem(3), family.problem(3)
+        for drawn, again in zip(first, second):
+            np.testing.assert_array_equal(drawn, again)
+        A, b = family.draw(np.random.RandomState(3))
+        np.testing.assert_array_equal(A, first[0])
+        np.testing.assert_array_equal(b, first[1])
+        self.assertEqual(len(b), family.num_planes)
+        with self.assertRaises(ValueError):
+            problem_generators.BoxSlabTestPlanes(1)
+        with self.assertRaises(ValueError):
+            problem_generators.WedgeTestPlanes(0.1, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
