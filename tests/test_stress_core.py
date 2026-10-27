@@ -261,5 +261,100 @@ class RandomPolyhedronTests(unittest.TestCase):
                 self.assertLessEqual(visit_excess(result, A, b), 1e-12)
 
 
+class DependentNormalTests(unittest.TestCase):
+    """Active normals that are linearly dependent or nearly so."""
+
+    CASES = {
+        "a box row repeated": (
+            [2.0, 0.5],
+            [[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0], [1.0, 0.0]],
+            [1.0, 1.0, 1.0, 1.0, 1.0],
+            [1.0, 0.5],
+            1e-12,
+        ),
+        "two normals 1e-10 apart through a vertex": (
+            # z - (0, 0) bisects the two normals, so both carry a multiplier
+            [-np.sin(5e-11), np.cos(5e-11)],
+            [[0.0, 1.0], [-np.sin(1e-10), np.cos(1e-10)], [1.0, 0.0], [-1.0, 0.0],
+             [0.0, -1.0]],
+            [0.0, 0.0, 1.0, 1.0, 1.0],
+            [0.0, 0.0],
+            # quadprog stops on the first boundary, 5e-11 from the vertex, where the two
+            # candidates' squared distances to z agree to rounding
+            1e-10,
+        ),
+        "three lines through one vertex": (
+            [3.0, 2.5],
+            [[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [-1.0, 0.0], [0.0, -1.0]],
+            [1.0, 1.0, 2.0, 1.0, 1.0],
+            [1.0, 1.0],
+            1e-12,
+        ),
+        "a 3-D box vertex with a fourth plane through it": (
+            [2.0, 3.0, 2.5],
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [-1.0, 0.0, 0.0],
+             [0.0, -1.0, 0.0], [0.0, 0.0, -1.0], [1.0, 1.0, 1.0]],
+            [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 3.0],
+            [1.0, 1.0, 1.0],
+            1e-12,
+        ),
+    }
+
+    def test_every_solver_reaches_the_vertex(self) -> None:
+        """The reference is the vertex to within each case's tolerance, and after 200
+        cycles every solver's squared error is within 1e-20 of the start's."""
+        for name, (z, A, b, vertex, reference_atol) in self.CASES.items():
+            z, A, b = np.array(z), np.array(A), np.array(b)
+            with self.subTest(case=name):
+                np.testing.assert_allclose(reference_projection(z, A, b), vertex,
+                                           rtol=0.0, atol=reference_atol)
+            for solver_type in SOLVERS:
+                with self.subTest(case=name, solver=solver_type.__name__):
+                    result, _ = run(solver_type, z, A, b, 200, track_error=True,
+                                    plot_errors=True)
+                    self.assertTrue(np.isfinite(result.path).all())
+                    self.assertLessEqual(result.squared_errors[-1],
+                                         1e-20 * result.squared_errors[0])
+                    self.assertLessEqual(visit_excess(result, A, b), 1e-12)
+
+
+class RedundantConstraintTests(unittest.TestCase):
+    """Constraints implied by others, repeated, or repeated at another scale."""
+
+    def test_redundant_rows_do_not_move_the_projection(self) -> None:
+        """With any of these rows added to the box, (2, 2) still projects onto the vertex
+        (1, 1), and every solver reaches it within 50 cycles."""
+        box_A = BOX_LINE_A[:4]
+        z = np.array([2.0, 2.0])
+        variants = {
+            "implied by the box": (np.vstack([box_A, [[1.0, 1.0]]]), np.append(np.ones(4), 3.0)),
+            "a row twice": (np.vstack([box_A, box_A[:1]]), np.ones(5)),
+            "a row and the same row times 1e3": (np.vstack([box_A, 1e3 * box_A[:1]]),
+                                                 np.append(np.ones(4), 1e3)),
+        }
+        for name, (A, b) in variants.items():
+            with self.subTest(case=name):
+                np.testing.assert_allclose(reference_projection(z, A, b), [1.0, 1.0],
+                                           rtol=0.0, atol=1e-14)
+            for solver_type in SOLVERS:
+                with self.subTest(case=name, solver=solver_type.__name__):
+                    result, _ = run(solver_type, z, A, b, 50)
+                    np.testing.assert_allclose(result.projection, [1.0, 1.0], rtol=0.0,
+                                               atol=1e-12)
+
+    def test_a_row_scaled_by_1e3_gives_the_same_path(self) -> None:
+        """Normals are normalised before use, so scaling a row and its offset together
+        changes nothing beyond rounding."""
+        z = np.array([-2.0, 1.4])
+        A, b = BOX_LINE_A.copy(), BOX_LINE_B.copy()
+        A[4], b[4] = 1e3 * A[4], 1e3 * b[4]
+        for solver_type in SOLVERS:
+            with self.subTest(solver=solver_type.__name__):
+                plain, plain_jumps = run(solver_type, z, BOX_LINE_A, BOX_LINE_B, 30)
+                scaled, scaled_jumps = run(solver_type, z, A, b, 30)
+                np.testing.assert_allclose(scaled.path, plain.path, rtol=0.0, atol=1e-12)
+                self.assertEqual(scaled_jumps, plain_jumps)
+
+
 if __name__ == "__main__":
     unittest.main()
