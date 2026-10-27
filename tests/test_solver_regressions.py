@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import sys
 import unittest
+import warnings
 
 import numpy as np
 
@@ -17,6 +18,7 @@ from convex_projection_solver import (
     DykstraMapHybridSolver,
     DykstraProjectionSolver,
     DykstraStallDetectionSolver,
+    dykstra_projection,
 )
 
 
@@ -240,6 +242,29 @@ class SolverRegressionTests(unittest.TestCase):
 
         self.assertLess(hybrid.squared_errors[-1], 1e-20)
         np.testing.assert_allclose(hybrid.projection, plain.projection, rtol=0.0, atol=1e-12)
+
+    def test_deprecated_delete_spaces_warning_names_the_caller(self) -> None:
+        """Python's default filters show a DeprecationWarning only when it is attributed to
+        __main__. With stacklevel 2 the warning for delete_spaces=True was attributed to
+        the constructors of the hybrid and stall detection solvers and to
+        dykstra_projection, all in convex_projection_solver.py, so a script calling them
+        never showed it."""
+        z, A, b = np.array([2.0, 0.0]), np.array([[1.0, 0.0]]), np.array([1.0])
+        calls = {
+            "DykstraMapHybridSolver":
+                lambda: DykstraMapHybridSolver(z, A, b, 1, delete_spaces=True),
+            "DykstraStallDetectionSolver":
+                lambda: DykstraStallDetectionSolver(z, A, b, 1, delete_spaces=True),
+            "dykstra_projection":
+                lambda: dykstra_projection(z, A, b, 1, delete_spaces=True),
+        }
+        for name, call in calls.items():
+            with self.subTest(caller=name):
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter("always")
+                    call()
+                self.assertEqual([w.category for w in caught], [DeprecationWarning])
+                self.assertEqual(Path(caught[0].filename).resolve(), Path(__file__).resolve())
 
 
 if __name__ == "__main__":
