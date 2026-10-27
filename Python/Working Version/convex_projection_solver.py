@@ -37,8 +37,9 @@ class ConvexProjectionSolver(ABC):
     """
 
     # Fraction of the magnitudes involved below which _track_error takes the squared
-    # errors of consecutive cycles as equal. Being relative, the decision does not
-    # depend on the scale of the problem or on a coordinate that no constraint touches.
+    # errors of consecutive cycles as equal and _beta_check takes a slack as zero. Being
+    # relative, neither decision depends on the scale of the problem or on a coordinate
+    # that no constraint touches.
     RELATIVE_TOLERANCE = 1e-10
 
     @staticmethod
@@ -200,6 +201,9 @@ class ConvexProjectionSolver(ABC):
         Selects a value of beta based on whether the passed point lies
         within the intersection of half-spaces.
 
+        A point projected onto a boundary lies in its half-space only to rounding, so
+        a slack counts as zero up to RELATIVE_TOLERANCE of the magnitudes summed in it.
+
         Args:
             point: Point to check.
             A: Matrix of normal vectors.
@@ -208,18 +212,14 @@ class ConvexProjectionSolver(ABC):
         Returns:
             int: 1 if the point is within the intersection, else 0.
         """
-        beta = 1
-        not_in_intersection = False
-        rounded_point = np.around(point, decimals=10)
-        
-        for _, (normal, offset) in enumerate(zip(A, b)):
+        for normal, offset in zip(A, b):
             unit_normal, constant_offset = ConvexProjectionSolver._normalise(normal, offset)
-            if not ConvexProjectionSolver._is_in_half_space(rounded_point, unit_normal, constant_offset):
-                not_in_intersection = True
-        
-        if not_in_intersection:
-            beta = 0
-        return beta
+            terms = point * unit_normal
+            tolerance = ConvexProjectionSolver.RELATIVE_TOLERANCE * (
+                np.abs(terms).sum() + abs(constant_offset))
+            if terms.sum() - constant_offset > tolerance:
+                return 0
+        return 1
 
     def __init__(self, z: np.ndarray, A: np.ndarray, b: np.ndarray,
                  max_iter: int, track_error: bool = False,
