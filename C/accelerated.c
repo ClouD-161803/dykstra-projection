@@ -795,6 +795,9 @@ static void slack_magnitudes(const accelerated_ws *w, const double *x, double *m
  * parallel the rows are.  A coordinate no support row touches keeps z's value
  * exactly: least squares leaves rounding there on the scale of the whole
  * correction, while the allowance there is built from that coordinate alone.
+ * A coordinate the support touches carries that rounding however little the
+ * step moves it, so its slack floors take the size of the whole correction
+ * rather than its own step.
  * The point must be feasible, and the multipliers nonnegative on the tight rows
  * only, both at rounding level.  It is then the projection of z minus the
  * residual, so the residual bounds its error; the multiplier terms enter the
@@ -808,6 +811,7 @@ static int kkt_verify(accelerated_ws *w, const int *sup, int ns)
     double *x = w->kx, *step = w->kstep;
 
     memcpy(x, z, (size_t)p * sizeof(double));
+    double moved = 0.0;
     if (ns > 0) {
         for (int i = 0; i < ns; ++i) {
             const double *a = w->units + (size_t)sup[i] * p;
@@ -819,11 +823,20 @@ static int kkt_verify(accelerated_ws *w, const int *sup, int ns)
             int touched = 0;
             for (int i = 0; i < ns && !touched; ++i)
                 touched = (w->units[(size_t)sup[i] * p + k] != 0.0);
-            if (touched) x[k] -= w->kcorr[k];
+            if (touched) {
+                x[k] -= w->kcorr[k];
+                moved += w->kcorr[k] * w->kcorr[k];
+            }
         }
+        moved = sqrt(moved);
     }
 
-    slack_magnitudes(w, x, w->kmag);
+    for (int k = 0; k < p; ++k) {
+        int touched = 0;
+        for (int i = 0; i < ns && !touched; ++i)
+            touched = (w->units[(size_t)sup[i] * p + k] != 0.0);
+        w->kmag[k] = fabs(z[k]) + (touched ? moved : 0.0);
+    }
     int nt = 0;
     for (int m = 0; m < n; ++m) {
         const double *a = w->units + (size_t)m * p;

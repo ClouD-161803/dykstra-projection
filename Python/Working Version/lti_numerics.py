@@ -487,18 +487,23 @@ def _kkt_verify(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray, support: 
     # span of the support's normals, so a coordinate none of them touches keeps z's
     # value. Least squares leaves rounding there on the scale of the whole correction,
     # while the allowance there is built from that coordinate alone and can be far
-    # smaller, so the true support would fail
+    # smaller, so the true support would fail. A coordinate the support touches carries
+    # that rounding however little the step moves it, so its slack floors take the
+    # size of the whole correction rather than its own step
     x = z.copy()
+    moved = np.zeros(len(z))
     if support.size:
         rows = unit_A[support]
         correction = np.linalg.lstsq(rows, rows @ z - unit_b[support], rcond=None)[0]
-        correction[~np.any(rows != 0.0, axis=0)] = 0.0
+        touched = np.any(rows != 0.0, axis=0)
+        correction[~touched] = 0.0
         x -= correction
+        moved[touched] = np.linalg.norm(correction)
 
     # Feasible, and multipliers nonnegative on the tight rows only, both at rounding
     # level, so complementarity holds to rounding
     slacks = unit_A @ x - unit_b
-    floor = rounding_floor(_kkt_slack_scale(z, unit_A, unit_b, x))
+    floor = rounding_floor(np.abs(unit_A) @ (np.abs(z) + moved) + np.abs(unit_b))
     if np.any(slacks > floor):
         return None
     tight = np.where(slacks >= -floor)[0]
