@@ -356,5 +356,107 @@ class RedundantConstraintTests(unittest.TestCase):
                 self.assertEqual(scaled_jumps, plain_jumps)
 
 
+class FeasibleStartTests(unittest.TestCase):
+    """Starts inside some or all of the half-spaces."""
+
+    def test_a_start_inside_the_intersection_never_moves(self) -> None:
+        """The start is its own projection: the error is zero at every cycle, no half-space
+        is ever active, and every correction vector stays zero."""
+        problems = {"the box": (np.array([0.25, -0.5]), BOX_LINE_A[:4], np.ones(4))}
+        for dimensions, num_planes, seed, _, _ in RANDOM_CASES[3:6]:
+            _, A, b, anchor = random_case(dimensions, num_planes, seed)
+            problems[f"{dimensions}-D anchor"] = (anchor, A, b)
+        for name, (z, A, b) in problems.items():
+            for solver_type in SOLVERS:
+                with self.subTest(case=name, solver=solver_type.__name__):
+                    result, jumps = run(solver_type, z, A, b, 10, track_error=True,
+                                        plot_errors=True, plot_active_halfspaces=True)
+                    np.testing.assert_array_equal(result.projection, z)
+                    np.testing.assert_array_equal(
+                        result.path, np.broadcast_to(z, result.path.shape))
+                    np.testing.assert_array_equal(result.squared_errors, 0.0)
+                    np.testing.assert_array_equal(result.active_half_spaces, 0.0)
+                    np.testing.assert_array_equal(result.errors_for_plotting, 0.0)
+                    self.assertEqual(jumps, [])
+
+    def test_constraints_containing_the_start_still_bound_the_projection(self) -> None:
+        """z = (-1, 0) lies in x <= 0 but not in x + y >= 2, and the projection (0, 2)
+        lies on both boundaries."""
+        z = np.array([-1.0, 0.0])
+        A = np.array([[1.0, 0.0], [-1.0, -1.0]])
+        b = np.array([0.0, -2.0])
+        for solver_type in SOLVERS:
+            with self.subTest(solver=solver_type.__name__):
+                result, _ = run(solver_type, z, A, b, 80)
+                np.testing.assert_allclose(result.projection, [0.0, 2.0], rtol=0.0,
+                                           atol=1e-9)
+
+
+class InvarianceTests(unittest.TestCase):
+    """The path, its classification, and the fast-forward under scaling the problem and under
+    an extra coordinate that no constraint touches.
+
+    Scaling multiplies every point by the scale and every squared error by its square, so
+    min_error is scaled with it. The extra coordinate holds 1e8, which no projection changes.
+    """
+
+    def problems(self):
+        problems = {f"box and line from {z}": (np.array(z), BOX_LINE_A, BOX_LINE_B, 30)
+                    for z in BOX_LINE_STALLS}
+        problems["wedge"] = (WEDGE_Z, WEDGE_A, WEDGE_B, 30)
+        z, A, b, _ = random_case(3, 8, 1002)
+        problems["3-D random"] = (z, A, b, 40)
+        return problems
+
+    def assert_same_run(self, reference, reference_jumps, result, jumps, scale):
+        np.testing.assert_allclose(result.path / scale, reference.path, rtol=0.0,
+                                   atol=1e-9 * np.abs(reference.path).max())
+        np.testing.assert_allclose(result.squared_errors / scale ** 2,
+                                   reference.squared_errors, rtol=1e-6,
+                                   atol=1e-12 * reference.squared_errors[0])
+        np.testing.assert_array_equal(stall_mask(result), stall_mask(reference))
+        np.testing.assert_array_equal(converged_mask(result), converged_mask(reference))
+        self.assertEqual(jumps, reference_jumps)
+
+    def test_scaling_the_problem_scales_the_run(self) -> None:
+        for name, (z, A, b, max_iter) in self.problems().items():
+            for solver_type in SOLVERS:
+                reference, reference_jumps = run(solver_type, z, A, b, max_iter,
+                                                 track_error=True)
+                for scale in (1e-6, 1e6):
+                    with self.subTest(case=name, solver=solver_type.__name__, scale=scale):
+                        result, jumps = run(solver_type, scale * z, A, scale * b, max_iter,
+                                            track_error=True, min_error=1e-3 * scale ** 2)
+                        self.assert_same_run(reference, reference_jumps, result, jumps,
+                                             scale)
+
+    def test_an_untouched_coordinate_changes_nothing(self) -> None:
+        for name, (z, A, b, max_iter) in self.problems().items():
+            extended_z = np.append(z, 1e8)
+            extended_A = np.hstack([A, np.zeros((A.shape[0], 1))])
+            for solver_type in SOLVERS:
+                with self.subTest(case=name, solver=solver_type.__name__):
+                    reference, reference_jumps = run(solver_type, z, A, b, max_iter,
+                                                     track_error=True)
+                    result, jumps = run(solver_type, extended_z, extended_A, b, max_iter,
+                                        track_error=True)
+                    np.testing.assert_array_equal(result.path[..., -1], 1e8)
+                    np.testing.assert_allclose(result.path[..., :-1], reference.path,
+                                               rtol=0.0, atol=1e-12)
+                    # The path agrees only to rounding, since np.dot sums vectors of
+                    # another length in another order. The squared errors may differ by
+                    # what that drift moves, and by nothing from the extra coordinate.
+                    drift = np.linalg.norm(result.path[:, -1, :-1] - reference.path[:, -1],
+                                           axis=1)
+                    allowed = ((2 * np.sqrt(reference.squared_errors) + drift) * drift
+                               + 8 * EPS * reference.squared_errors)
+                    self.assertTrue(np.all(np.abs(result.squared_errors
+                                                  - reference.squared_errors) <= allowed))
+                    np.testing.assert_array_equal(stall_mask(result), stall_mask(reference))
+                    np.testing.assert_array_equal(converged_mask(result),
+                                                  converged_mask(reference))
+                    self.assertEqual(jumps, reference_jumps)
+
+
 if __name__ == "__main__":
     unittest.main()
