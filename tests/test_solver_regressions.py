@@ -295,6 +295,19 @@ class SolverRegressionTests(unittest.TestCase):
         np.testing.assert_array_equal(solver.actual_projection, z)
         np.testing.assert_array_equal(solver.solve().squared_errors, 0.0)
 
+    def test_an_untouched_coordinate_keeps_its_value_in_the_reference(self) -> None:
+        """quadprog rounds every coordinate in its unconstrained step and corrects only the
+        directions of the active normals, so an extra coordinate of 1e8 that no constraint
+        touches came back as 1e8 - 1.49e-8, one unit in its last place."""
+        z = np.array([-2.0, 1.4, 1e8])
+        A = np.hstack([BOX_LINE_A, np.zeros((6, 1))])
+        reference = DykstraProjectionSolver(z, A, BOX_LINE_B, 0).actual_projection
+
+        self.assertEqual(reference[-1], 1e8)
+        np.testing.assert_array_equal(
+            reference[:-1],
+            DykstraProjectionSolver(z[:-1], BOX_LINE_A, BOX_LINE_B, 0).actual_projection)
+
 
 if __name__ == "__main__":
     unittest.main()
