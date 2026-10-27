@@ -1,6 +1,7 @@
 """Numerical pieces of the LTI solvers and the oracle, free of solver state: the exact
 Dykstra cycle in scalar auxiliaries, the cycle map of an episode and its closed-form
-constants, the envelope horizon, the frozen-stall crossing, and the KKT certificate."""
+constants, the envelope horizon, the frozen-stall crossing, the KKT certificate, and the
+work of each piece in flops."""
 
 from collections import namedtuple
 from functools import wraps
@@ -418,21 +419,24 @@ def _lawson_hanson(k: int, gradient, solve) -> np.ndarray:
 
 
 @ignore_blas_flags
-def nonnegative_least_squares(C: np.ndarray, d: np.ndarray) -> np.ndarray:
-    """min ||C l - d|| over l >= 0."""
+def nonnegative_least_squares(C: np.ndarray, d: np.ndarray, tally=None) -> np.ndarray:
+    """min ||C l - d|| over l >= 0, adding its flops to tally if a KKTTally is given."""
     # Each support is solved on the columns of C, not the normal equations, whose
     # conditioning is squared. A gradient entry counts as positive only above the
     # rounding of the terms summed into it, so a row of C that is zero, a coordinate no
     # normal touches, raises no entry's threshold
     abs_C = np.abs(C)
-    return _lawson_hanson(C.shape[1],
-                          lambda lam: C.T @ (d - C @ lam) - rounding_floor(abs_C.T @ (np.abs(d) + abs_C @ lam)),
-                          lambda P: (np.linalg.lstsq(C[:, P], d, rcond=None)[0], None))
+    gradient = lambda lam: C.T @ (d - C @ lam) - rounding_floor(abs_C.T @ (np.abs(d) + abs_C @ lam))
+    solve = lambda P: (np.linalg.lstsq(C[:, P], d, rcond=None)[0], None)
+    if tally is not None:
+        gradient, solve = tally.counting(gradient, 8 * C.size, solve, lambda P: (C.shape[0], len(P)))
+    return _lawson_hanson(C.shape[1], gradient, solve)
 
 
 @ignore_blas_flags
-def nonnegative_quadratic(H: np.ndarray, c: np.ndarray) -> np.ndarray:
-    """min 1/2 l^T H l - c^T l over l >= 0, H positive semidefinite."""
+def nonnegative_quadratic(H: np.ndarray, c: np.ndarray, tally=None) -> np.ndarray:
+    """min 1/2 l^T H l - c^T l over l >= 0, H positive semidefinite, adding its flops to tally
+    if a KKTTally is given."""
     abs_H = np.abs(H)
 
     def solve(P: np.ndarray) -> tuple:
@@ -451,7 +455,10 @@ def nonnegative_quadratic(H: np.ndarray, c: np.ndarray) -> np.ndarray:
                 return minimiser, residual
         return minimiser, None
 
-    return _lawson_hanson(len(c), lambda lam: c - H @ lam - rounding_floor(np.abs(c) + abs_H @ lam), solve)
+    gradient = lambda lam: c - H @ lam - rounding_floor(np.abs(c) + abs_H @ lam)
+    if tally is not None:
+        gradient, solve = tally.counting(gradient, 4 * H.size, solve, lambda P: (len(P), len(P)))
+    return _lawson_hanson(len(c), gradient, solve)
 
 
 def _kkt_slack_scale(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray, x: np.ndarray) -> np.ndarray:
@@ -467,34 +474,51 @@ class KKTMemo:
     # A candidate support follows from the candidate rows alone, and a verdict from the
     # support alone, once z and the constraints are fixed, as they are through a solve. A
     # support that failed fails again, so reusing either changes neither the outcome nor
-    # the point
+    # the point. costs holds the flops each entry of derived and rejected took, when a
+    # KKTTally counted them, so that a later test can count the work it reuses
     def __init__(self) -> None:
         self.derived = {}
         self.rejected = set()
+        self.costs = {}
 
 
 @ignore_blas_flags
 def kkt_certificate(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray,
-                    hint: np.ndarray, active: np.ndarray, memo: KKTMemo | None = None) -> tuple | None:
-    """Projection and multipliers, if proven."""
+                    hint: np.ndarray, active: np.ndarray, memo: KKTMemo | None = None,
+                    tally=None) -> tuple | None:
+    """Projection and multipliers, if proven, adding the test's flops to tally if a KKTTally is
+    given."""
     # Candidate rows: the active set and every row near the hint
     active = np.asarray(active, dtype=bool)
     slacks = unit_A @ hint - unit_b
     near = slacks >= -_KKT_CANDIDATE_TOL * _kkt_slack_scale(z, unit_A, unit_b, hint)
     rows = np.where(active | near)[0]
     memo = KKTMemo() if memo is None else memo
+    if tally is not None:
+        tally.candidates = rows.size
+        tally.flops += 4 * unit_A.size
 
     def derived(dual: bool) -> np.ndarray:
         """Rows binding at the projection onto the candidate rows' polyhedron."""
         key = (tuple(rows), dual)
         if key not in memo.derived:
+            spent = 0 if tally is None else tally.flops
             N = unit_A[rows]
             if dual:
-                weights = nonnegative_quadratic(N @ N.T, N @ z - unit_b[rows])
+                weights = nonnegative_quadratic(N @ N.T, N @ z - unit_b[rows], tally=tally)
             else:
                 apex = np.linalg.lstsq(N, unit_b[rows], rcond=None)[0]
-                weights = nonnegative_least_squares(N.T, z - apex)
+                weights = nonnegative_least_squares(N.T, z - apex, tally=tally)
             memo.derived[key] = rows[weights > 0.0]
+            if tally is not None:
+                # the Gram matrix and N z for the dual, the apex for the cone
+                if dual:
+                    tally.flops += 2 * N.size * (len(N) + 1)
+                else:
+                    tally.solve(*N.shape)
+                memo.costs[key] = tally.flops - spent
+        elif tally is not None:
+            tally.reused += memo.costs.get(key, 0)
         return memo.derived[key]
 
     def supports():
@@ -514,21 +538,39 @@ def kkt_certificate(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray,
                 for subset in combinations(rows, size):
                     yield np.array(subset)
 
+    # A support repeated within one test is verified once, as the C test does, so a repeat is
+    # neither verified nor counted as work the memo saved
     tried = set()
     for support in supports():
         key = tuple(support)
-        if key in tried or key in memo.rejected:
+        if key in tried:
             continue
         tried.add(key)
-        certified = _kkt_verify(z, unit_A, unit_b, support)
+        if key in memo.rejected:
+            if tally is not None:
+                tally.skipped += 1
+                tally.reused += memo.costs.get(key, 0)
+            continue
+        spent = 0 if tally is None else tally.flops
+        certified = _kkt_verify(z, unit_A, unit_b, support, tally=tally)
         if certified is not None:
             return certified
         memo.rejected.add(key)
+        if tally is not None:
+            memo.costs[key] = tally.flops - spent
     return None
 
 
-def _kkt_verify(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray, support: np.ndarray) -> tuple | None:
-    """KKT test at the projection onto a support."""
+def _kkt_verify(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray, support: np.ndarray,
+                tally=None) -> tuple | None:
+    """KKT test at the projection onto a support, adding its flops to tally if a KKTTally is
+    given."""
+    if tally is not None:
+        # the slacks, their floors, the residual and its allowance, and rows @ z
+        tally.verified += 1
+        tally.flops += 8 * unit_A.size + 2 * support.size * len(z)
+        if support.size:
+            tally.solve(support.size, len(z))
     # The projection of z onto the boundaries of the support, by least squares, which
     # is backward stable however nearly parallel the rows are. The step lies in the
     # span of the support's normals, so a coordinate none of them touches keeps z's
@@ -557,7 +599,7 @@ def _kkt_verify(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray, support: 
     step = z - x
     multipliers = np.zeros(len(unit_b))
     if tight.size:
-        multipliers[tight] = nonnegative_least_squares(unit_A[tight].T, step)
+        multipliers[tight] = nonnegative_least_squares(unit_A[tight].T, step, tally=tally)
 
     # x is then the projection of z - r, so the residual r bounds its error. The
     # multiplier terms enter only at rounding: they grow as the tight normals become
@@ -574,3 +616,162 @@ def _kkt_verify(z: np.ndarray, unit_A: np.ndarray, unit_b: np.ndarray, support: 
     if np.any(np.abs(residual) > allowed):
         return None
     return x, multipliers
+
+
+# ---- work, in flops
+
+# One flop is one addition or one multiplication, counted to leading order in the sizes a piece
+# of the solver is given: n half-spaces, p coordinates, m active half-spaces, k the rank of the
+# active normals. A piece that works on the touched coordinates alone is given their number as
+# p. A power of a float or of a complex number counts as _POWER_FLOPS, an estimate. Comparisons,
+# absolute values, copies and interpreter time are not counted. cost_model.py derives every
+# count from the code above, sets them against the C solver's, and fits them to wall times
+_POWER_FLOPS = 20
+
+
+def lstsq_flops(rows: int, cols: int) -> int:
+    """Flops of an SVD of a rows x cols matrix, or of a least-squares solve through one, at the
+    cost of its bidiagonalisation."""
+    short, long = min(rows, cols), max(rows, cols)
+    return 4 * long * short * short
+
+
+def lu_solve_flops(p: int, right_hand_sides: int) -> int:
+    """Flops of numpy.linalg.solve on a p x p matrix: its LU factorisation and the
+    substitutions for every right-hand side."""
+    return 2 * p ** 3 // 3 + 2 * right_hand_sides * p * p
+
+
+def matrix_power_flops(p: int, exponent: int) -> int:
+    """Flops of numpy.linalg.matrix_power on a p x p matrix, which squares once for every bit of
+    the exponent after the first and multiplies once for every set bit after the first."""
+    if exponent < 2:
+        return 0
+    return 2 * p ** 3 * (exponent.bit_length() + bin(exponent).count("1") - 2)
+
+
+def exact_cycle_flops(n: int, p: int, m: int) -> int:
+    """exact_cycle: the shifted point and its slack at every half-space, and the projection at
+    the m that end the cycle active."""
+    return 4 * n * p + 2 * m * p
+
+
+def cycle_map_flops(n: int, p: int, m: int) -> int:
+    """cycle_map: a row of R and of R_scale at every half-space, the product of the prefix map
+    by a dense projector at every active one, and the SVD of the active normals."""
+    return 4 * n * p * (p + 1) + m * (2 * p ** 3 + 4 * p * p) + lstsq_flops(p, m)
+
+
+def resolvent_flops(p: int) -> int:
+    """touched_resolvent and the condition number of I - A_m, by SVD."""
+    return p * p + lstsq_flops(p, p)
+
+
+def closed_form_flops(n: int, p: int, envelope: bool) -> int:
+    """closed_form: two LU solves, for x_inf and for RIA, the levels and drifts of every
+    auxiliary, and, when the envelope is used, the contraction rate by SVD."""
+    return (lu_solve_flops(p, 1) + lu_solve_flops(p, n) + 14 * n * p
+            + (lstsq_flops(p, p) if envelope else 0))
+
+
+def deflated_closed_form_flops(n: int, p: int, k: int) -> int:
+    """deflated_closed_form: the projector P_1 onto the kernel, the condition number of
+    I - A_m + P_1 by SVD, two LU solves, and the levels and drifts of every auxiliary."""
+    return (2 * k * p * p + 4 * p * p + lstsq_flops(p, p) + lu_solve_flops(p, 1)
+            + lu_solve_flops(p, n) + 14 * n * p)
+
+
+def modal_form_flops(n: int, p: int, k: int) -> int:
+    """The modal form of a singular episode: the block Q^T A_m Q, its eigendecomposition, the
+    condition number of its complex eigenvectors, the coordinates of the transient, and the
+    modal coefficients and envelopes of every half-space."""
+    return (2 * k * p * (p + k) + 25 * k ** 3 + 4 * lstsq_flops(k, k) + 4 * lu_solve_flops(k, 1)
+            + 8 * n * p * k + 10 * n * k * k)
+
+
+def closed_form_cycle_flops(n: int, p: int) -> int:
+    """One cycle of a regular episode in closed form: A_m z_t, the auxiliaries, the slacks, the
+    rounding level of each, and the finality test."""
+    return 2 * p * p + 8 * n * p
+
+
+def stepped_cycle_flops(n: int, p: int, k: int) -> int:
+    """One cycle stepped through the cycle map: the increment of every auxiliary and its
+    rounding level, and the step confined to the span of the active normals."""
+    return 4 * n * p + 2 * p * p + 4 * p * k
+
+
+def frozen_probe_flops(p: int) -> int:
+    """is_frozen: one application of the cycle map and of its magnitudes."""
+    return 4 * p * p
+
+
+def modal_block_flops(n: int, p: int, k: int, cycles: int) -> int:
+    """One block of the modal scan: the powers of the k modes, and the auxiliaries, slacks and
+    envelopes of every half-space at every cycle of the block, then the state, the
+    stationarity probe and the clearance at the block's ends."""
+    return (cycles * (18 * n * k + 2 * k * _POWER_FLOPS) + 20 * n * k + 16 * k * k + 8 * p * k
+            + 4 * p * p)
+
+
+def jump_length_flops(n: int, m: int) -> int:
+    """jump_length: the slack of every inactive half-space, and the envelope horizon of every
+    active one by bisection, about 60 evaluations of the envelope with a power each."""
+    return 6 * n + 60 * (4 + _POWER_FLOPS) * m
+
+
+def jump_landing_flops(n: int, p: int, exponent: int) -> int:
+    """One landing an envelope jump tries: A_m to the exponent applied to the transient, one
+    more cycle, and the activity there."""
+    return matrix_power_flops(p, exponent) + 4 * p * p + 8 * n * p
+
+
+def budget_jump_flops(n: int, p: int, exponent: int) -> int:
+    """The jump to the budget once the active set is final: A_m to the exponent applied to the
+    transient, and the auxiliaries there."""
+    return matrix_power_flops(p, exponent) + 2 * p * p + 2 * n * p
+
+
+def stall_flops(n: int, p: int) -> int:
+    """A stall fast-forward: the increment of every auxiliary and its rounding level, and the
+    first crossing."""
+    return 4 * n * p + 12 * n
+
+
+def replay_flops(p: int, m: int) -> int:
+    """One cycle replayed into the history from the previous one: a projection at every active
+    half-space."""
+    return 4 * m * p
+
+
+class KKTTally:
+    """Work of one KKT test in flops, from the sizes of its products and least-squares solves,
+    which kkt_certificate adds to as it runs."""
+
+    def __init__(self) -> None:
+        self.flops = 0
+        # Flops that an earlier test of the same solve spent on a derived support or on a support
+        # it rejected, which KKTMemo lets this test reuse. Without the memo, which the C solver
+        # does not keep, this test would cost flops + reused
+        self.reused = 0
+        self.solves = 0
+        self.candidates = 0
+        self.verified = 0
+        self.skipped = 0
+
+    def solve(self, rows: int, cols: int) -> None:
+        """Counts a least-squares solve on a rows x cols matrix."""
+        self.solves += 1
+        self.flops += lstsq_flops(rows, cols)
+
+    def counting(self, gradient, gradient_flops: int, solve, shape) -> tuple:
+        """The gradient and the support solve of _lawson_hanson, wrapped to count gradient_flops
+        for every gradient and a solve on a matrix of shape(support) for every solve."""
+        def counted_gradient(lam: np.ndarray) -> np.ndarray:
+            self.flops += gradient_flops
+            return gradient(lam)
+
+        def counted_solve(support: np.ndarray) -> tuple:
+            self.solve(*shape(support))
+            return solve(support)
+        return counted_gradient, counted_solve
