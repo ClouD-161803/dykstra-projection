@@ -279,6 +279,86 @@ class StressTests(unittest.TestCase):
                 bound = 1e-9 * float(np.linalg.norm(z - projection)) + 1e-13 * scale
                 self.assertLessEqual(float(np.linalg.norm(certified[0] - projection)), bound)
 
+    def test_a_start_inside_the_polyhedron_is_its_own_projection(self) -> None:
+        # Nothing activates, so Dykstra never moves, and deflated_modal certifies the start
+        # on entering cycle 2 and the C solver after its first cycle
+        z, A, b = np.array([0.1, -0.2, 0.3]), np.vstack([np.eye(3), -np.eye(3)]), np.ones(6)
+        for preset in PRESETS:
+            with self.subTest(preset=preset):
+                result = LTISolver(z, A, b, max_iter=50, preset=preset).solve()
+                np.testing.assert_array_equal(result.projection, z)
+                if preset == "deflated_modal":
+                    self.assertEqual((result.settled_at, result.certificate), (2, "kkt"))
+        if libraries_built():
+            accelerated = accelerated_c_projection(z, A, b, 50)
+            self.assertTrue(accelerated.settled)
+            self.assertEqual(accelerated.cycles, 1)
+            np.testing.assert_array_equal(accelerated.projection, z)
+            np.testing.assert_array_equal(dykstra_c_projection(z, A, b, 50).projection, z)
+
+    def test_scaling_and_an_untouched_coordinate_change_no_decision(self) -> None:
+        # Every LTI tolerance is relative, so scaling z and b by 1e-6 or 1e6, or adding a
+        # coordinate of 1e8 that no constraint touches, changes neither the settlement nor
+        # the active-set history. Rows that a Dykstra cycle itself decides by rounding are
+        # left out: the idle member of an equality written as two half-spaces, and rows
+        # 1e-10 rad apart, whose multipliers rounding apportions
+        problems = {f"random {key[0]} by {key[1]}": random_problem(*key) for key in RANDOM_SIZES[:6]}
+        degenerate = degenerate_problems()
+        for name in ("duplicate rows", "three lines through a vertex", "box vertex with a fourth plane",
+                     "five planes through a vertex", "rows 1e-08 rad apart"):
+            problems[name] = degenerate[name]
+        transforms = {
+            "scaled by 1e-6": lambda z, A, b: (1e-6 * z, A, 1e-6 * b),
+            "scaled by 1e6": lambda z, A, b: (1e6 * z, A, 1e6 * b),
+            "untouched coordinate of 1e8 first": lambda z, A, b: (np.insert(z, 0, 1e8),
+                                                                  np.insert(A, 0, 0.0, axis=1), b),
+            "untouched coordinate of 1e8 last": lambda z, A, b: (np.append(z, 1e8),
+                                                                 np.insert(A, A.shape[1], 0.0, axis=1), b),
+        }
+
+        def restore(name: str, point: np.ndarray) -> np.ndarray:
+            """The point in the original problem's coordinates."""
+            if name.startswith("scaled"):
+                return point / (1e-6 if name.endswith("1e-6") else 1e6)
+            return point[1:] if name.endswith("first") else point[:-1]
+
+        for case_name, (z, A, b) in problems.items():
+            scale = float(np.abs(z).max())
+            for budget in (3, 30, 300):
+                for preset in PRESETS:
+                    plain = LTISolver(z, A, b, max_iter=budget, preset=preset, plot_active_halfspaces=True).solve()
+                    for name, transform in transforms.items():
+                        with self.subTest(case=case_name, budget=budget, preset=preset, transform=name):
+                            other = LTISolver(*transform(z, A, b), max_iter=budget, preset=preset,
+                                              plot_active_halfspaces=True).solve()
+                            self.assertEqual((other.settled_at, other.certificate),
+                                             (plain.settled_at, plain.certificate))
+                            np.testing.assert_array_equal(other.active_half_spaces, plain.active_half_spaces)
+                            np.testing.assert_allclose(restore(name, other.projection), plain.projection,
+                                                       rtol=0.0, atol=1e-12 * scale)
+                            if not name.startswith("scaled"):
+                                self.assertEqual(other.projection[0 if name.endswith("first") else -1], 1e8)
+                if not libraries_built():
+                    continue
+                for solve in (accelerated_c_projection, dykstra_c_projection):
+                    plain = solve(z, A, b, budget)
+                    for name, transform in transforms.items():
+                        with self.subTest(case=case_name, budget=budget, solver=solve.__name__, transform=name):
+                            other = solve(*transform(z, A, b), budget)
+                            multipliers = other.multipliers
+                            if name.startswith("scaled"):
+                                multipliers = restore(name, multipliers)
+                            np.testing.assert_allclose(restore(name, other.projection), plain.projection,
+                                                       rtol=0.0, atol=1e-12 * scale)
+                            np.testing.assert_allclose(multipliers, plain.multipliers, rtol=1e-9,
+                                                       atol=1e-12 * float(np.abs(plain.multipliers).max()))
+                            # Plain Dykstra stops at the first cycle that changes nothing,
+                            # which rounding decides under scaling
+                            if solve is accelerated_c_projection or not name.startswith("scaled"):
+                                self.assertEqual(
+                                    (other.settled, other.cycles, other.exact_cycles, other.cycles_skipped),
+                                    (plain.settled, plain.cycles, plain.exact_cycles, plain.cycles_skipped))
+
 
 if __name__ == "__main__":
     unittest.main()
