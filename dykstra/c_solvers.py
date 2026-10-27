@@ -29,7 +29,8 @@ class _AcceleratedInfo(ctypes.Structure):
                 ("switches", ctypes.c_int), ("skips", ctypes.c_int),
                 ("cycles_skipped", ctypes.c_longlong), ("kkt_attempts", ctypes.c_int),
                 ("entry_tests", ctypes.c_int), ("failed_entry_work", ctypes.c_longlong),
-                ("work", ctypes.c_longlong), ("settled_at", ctypes.c_int)]
+                ("work", ctypes.c_longlong), ("power_iterations", ctypes.c_longlong),
+                ("settled_at", ctypes.c_int)]
 
 
 class _DykstraInfo(ctypes.Structure):
@@ -58,9 +59,10 @@ class CSolverResult:
     # its exact cycles after the first, and the jumps whose cycles cycles_skipped
     # sums. kkt_attempts counts its KKT tests, entry_tests those at phase entries,
     # and failed_entry_work and work are the work of the failed entry tests and
-    # all other work, as LTISolver.kkt_record counts them. settled_at is the cycle
-    # from which a settled accelerated result is the projection, as LTISolver's
-    # settled_at, and None for any other result
+    # all other work, as LTISolver.kkt_record counts them. power_iterations counts
+    # the iterations of the power methods that bound norms of phase matrices.
+    # settled_at is the cycle from which a settled accelerated result is the
+    # projection, as LTISolver's settled_at, and None for any other result
     projection: np.ndarray
     settled: bool
     cycles: int
@@ -75,6 +77,7 @@ class CSolverResult:
     entry_tests: int = 0
     failed_entry_work: int = 0
     work: int = 0
+    power_iterations: int = 0
     settled_at: int | None = None
 
 
@@ -142,7 +145,7 @@ def _solve(name: str, z: np.ndarray, A: np.ndarray, b: np.ndarray,
                  "step_episodes": info.step_episodes, "switches": info.switches,
                  "skips": info.skips, "kkt_attempts": info.kkt_attempts,
                  "entry_tests": info.entry_tests, "failed_entry_work": info.failed_entry_work,
-                 "work": info.work,
+                 "work": info.work, "power_iterations": info.power_iterations,
                  "settled_at": info.settled_at if code == 0 else None} if accelerated else {})
     return CSolverResult(projection=x, settled=(code == 0), cycles=info.cycles,
                          multipliers=multipliers[:n],

@@ -77,6 +77,8 @@ typedef struct {
     long long failed_entry_work; /* work of the entry tests that failed, in
                                   the flops of lti_numerics.kkt_test_work     */
     long long work;            /* all other work, in the same unit            */
+    long long power_iterations; /* iterations of the power and inverse power
+                                  methods that bound norms of phase matrices  */
     int       settled_at;      /* on ACCELERATED_SETTLED, the cycle from which
                                   x_out is the projection, as LTISolver's
                                   settled_at: the entry of the phase whose test

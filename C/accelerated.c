@@ -230,7 +230,7 @@ static double frobenius_norm(const double *A, int p)
  * value when singular values cluster, so a caller that needs an upper bound
  * takes the Frobenius norm whenever *converged is left unset. */
 static double spectral_norm(const double *A, int p, double *v, double *u,
-                            int *converged)
+                            int *converged, long long *iterations)
 {
     int reseeds = 0;
     *converged = 0;
@@ -240,6 +240,7 @@ static double spectral_norm(const double *A, int p, double *v, double *u,
 
     double sig = 0.0;
     for (int it = 0; it < 500; ++it) {
+        *iterations += 1;
         matvec(A, v, u, p, p);
         double nu = nrm2(u, p);
         if (!isfinite(nu)) return INFINITY;
@@ -280,7 +281,7 @@ static double spectral_norm(const double *A, int p, double *v, double *u,
  * value; it only chooses between the closed form and the deflated or stepped
  * episode, all of which trace the same path. */
 static double cond2_estimate(const double *LU, const int *ipiv, int p,
-                             double smax, double *v, double *u)
+                             double smax, double *v, double *u, long long *iterations)
 {
     seed_vector(v, p, 7u);
     double nv = nrm2(v, p);
@@ -288,6 +289,7 @@ static double cond2_estimate(const double *LU, const int *ipiv, int p,
 
     double inv_smin = 0.0;
     for (int it = 0; it < 200; ++it) {
+        *iterations += 1;
         memcpy(u, v, (size_t)p * sizeof(double));
         lu_solve_t(LU, ipiv, p, u);
         double nu = nrm2(u, p);
@@ -1165,11 +1167,12 @@ static double factor_resolvent(accelerated_ws *w)
 {
     const int p = w->p;
     int conv = 0;
-    double smax = spectral_norm(w->IA, p, w->pw1, w->pw2, &conv);
+    double smax = spectral_norm(w->IA, p, w->pw1, w->pw2, &conv, &w->info.power_iterations);
     if (!conv) smax = frobenius_norm(w->IA, p);
     memcpy(w->LU, w->IA, (size_t)p * p * sizeof(double));
     if (lu_factor(w->LU, p, w->ipiv)) return INFINITY;
-    const double cond = cond2_estimate(w->LU, w->ipiv, p, smax, w->pw1, w->pw2);
+    const double cond = cond2_estimate(w->LU, w->ipiv, p, smax, w->pw1, w->pw2,
+                                       &w->info.power_iterations);
     return isfinite(cond) ? cond : INFINITY;
 }
 
@@ -1244,7 +1247,7 @@ static void setup_regular(accelerated_ws *w)
     memcpy(w->u0, w->pw3, (size_t)p * sizeof(double));
 
     int conv = 0;
-    double smax = spectral_norm(w->Am, p, w->pw1, w->pw2, &conv);
+    double smax = spectral_norm(w->Am, p, w->pw1, w->pw2, &conv, &w->info.power_iterations);
     smax = conv ? smax * (1.0 + 1e-9) : frobenius_norm(w->Am, p);
     w->rho = (smax < RHO_CAP) ? smax : RHO_CAP;
 }
@@ -1312,7 +1315,7 @@ static int setup_deflated(accelerated_ws *w)
     w->sWys = w->Wys; w->sWgs = w->Wgs;
 
     int conv = 0;
-    double smax = spectral_norm(w->T, kb, w->pw1, w->pw2, &conv);
+    double smax = spectral_norm(w->T, kb, w->pw1, w->pw2, &conv, &w->info.power_iterations);
     smax = conv ? smax * (1.0 + 1e-9) : frobenius_norm(w->T, kb);
     w->rho = (smax < RHO_CAP) ? smax : RHO_CAP;
     return 1;
