@@ -308,6 +308,19 @@ class SolverRegressionTests(unittest.TestCase):
             reference[:-1],
             DykstraProjectionSolver(z[:-1], BOX_LINE_A, BOX_LINE_B, 0).actual_projection)
 
+    def test_reference_projection_raises_no_floating_point_warning(self) -> None:
+        """numpy 2.1 linked to Apple's Accelerate, as on the author's machine, warns of a
+        division by zero in matrix products of size 16 and above. The QP's P and q were
+        formed as products with an identity matrix, so constructing any solver for a
+        problem in 16 dimensions printed such warnings."""
+        z = np.full(16, 2.0)
+        A = np.vstack([np.eye(16), -np.eye(16)])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            reference = DykstraProjectionSolver(z, A, np.ones(32), 0).actual_projection
+
+        np.testing.assert_allclose(reference, np.ones(16), rtol=0.0, atol=1e-15)
+
 
 if __name__ == "__main__":
     unittest.main()
